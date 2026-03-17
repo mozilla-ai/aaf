@@ -67,6 +67,14 @@ export class OpenAiCompatibleBackend implements LlmBackend {
     return 'OpenAI';
   }
 
+  setModel(model: string): void {
+    this.model = model;
+  }
+
+  currentModel(): string {
+    return this.model;
+  }
+
   /** Generate using native tool-use via the OpenAI-compatible tools parameter. */
   async generateWithTools(
     userPrompt: string,
