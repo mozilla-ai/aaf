@@ -106,7 +106,7 @@ Observed CLI output:
 
 [discover] Found 1 action(s) on https://www.amazon.com/ [inferred]
   context: e-commerce / homepage (0.95)
-  summary: The homepage of Amazon, featuring various product categories, promotional content, and a search functionality.
+  summary: The homepage of Amazon, featuring various product categories, promotional deals, and a search functionality.
   search.submit (source:inferred, risk:low, confirm:optional, confidence:0.92)
     unsupported: Primary target lacks an accessible name
     field: query <search>
@@ -119,7 +119,7 @@ aaf> search for manchego cheese
   args: {"query":"manchego cheese"}
 
 ✗ Status: validation_error
-✗ Error: optional
+✗ Error: Primary target lacks an accessible name
 ```
 
 What this suggests:
@@ -134,6 +134,34 @@ This is a useful failure, not a useless one. It shows:
 - the classification and intent inference are reasonably strong
 - the current bottleneck is reliable execution grounding on complex sites
 - the next improvements should focus more on target resolution and execution recovery than on basic page understanding
+
+### Error Reporting Status
+
+Error reporting for inferred-action failures is now clearer than it was earlier in the run.
+
+Previously, some blocked inferred actions surfaced placeholder text like:
+
+- `optional`
+
+That was confusing and did not explain the real failure mode.
+
+Current behavior:
+
+- blocked inferred actions now surface the actual grounding/safety reason when available
+- in the Amazon case, the runtime now reports:
+  - `Primary target lacks an accessible name`
+
+This is better because it tells us:
+
+- the planner likely chose the right high-level action
+- the failure was in execution grounding, not intent understanding
+
+So at this point the error logging is good enough to distinguish:
+
+- page understanding problems
+- target-grounding problems
+- safety blocks
+- input validation problems
 
 ## Important Constraint
 

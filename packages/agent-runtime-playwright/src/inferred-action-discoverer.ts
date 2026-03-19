@@ -3,7 +3,7 @@ import type { LlmBackend } from '@agent-accessibility-framework/planner-local';
 import { buildInferenceSystemPrompt, type DiscoverySnapshot, type RawInferenceResult, type RawInferredAction } from './inference-prompt.js';
 import { extractAccessibilitySummary } from './accessibility-extractor.js';
 import { extractDomSnapshot } from './dom-affordance-extractor.js';
-import { applyInferenceRiskRules, toEvidence } from './inference-risk.js';
+import { applyInferenceRiskRules, sanitizeUnsupportedReason, toEvidence } from './inference-risk.js';
 import type { Page } from '@playwright/test';
 import type { ResolvedInferredAction, ResolvedInferredField } from './inferred-action-executor.js';
 
@@ -152,7 +152,7 @@ export function parseInference(raw: string): RawInferenceResult {
           ? action.expectedEffect
           : 'unknown',
         supported: action.supported !== false,
-        unsupportedReason: typeof action.unsupportedReason === 'string' ? action.unsupportedReason : undefined,
+        unsupportedReason: typeof action.unsupportedReason === 'string' ? sanitizeUnsupportedReason(action.unsupportedReason) : undefined,
         evidence: Array.isArray(action.evidence) ? action.evidence.filter((item): item is { kind: string; value: string } => Boolean(item && typeof item.kind === 'string' && typeof item.value === 'string')) : [],
       })),
   };

@@ -3,14 +3,21 @@ import type { DiscoverySnapshot, RawInferredAction } from './inference-prompt.js
 
 const HIGH_RISK_PATTERN = /\b(delete|remove|destroy|logout|sign out|pay|purchase|buy now|place order|checkout|confirm transfer|close account|reset|revoke)\b/i;
 const SUPPORTED_CONTROL_TYPES = new Set(['text', 'email', 'password', 'search', 'number', 'date', 'textarea', 'select', 'checkbox', 'radio']);
+const PLACEHOLDER_UNSUPPORTED_REASONS = new Set(['optional', 'never', 'review', 'required', 'true', 'false', 'n/a', 'none']);
+
+export function sanitizeUnsupportedReason(reason: string | undefined): string | undefined {
+  if (!reason) return undefined;
+  const normalized = reason.trim();
+  if (!normalized) return undefined;
+  if (PLACEHOLDER_UNSUPPORTED_REASONS.has(normalized.toLowerCase())) return undefined;
+  return normalized;
+}
 
 export function applyInferenceRiskRules(
   action: RawInferredAction,
   snapshot: DiscoverySnapshot,
 ): RawInferredAction {
-  const seedReason = action.unsupportedReason && action.unsupportedReason !== 'optional'
-    ? action.unsupportedReason
-    : undefined;
+  const seedReason = sanitizeUnsupportedReason(action.unsupportedReason);
   const targetNodes = action.targetIds
     .map((id) => snapshot.interactives.find((node) => node.elementId === id))
     .filter((node): node is DiscoverySnapshot['interactives'][number] => Boolean(node));

@@ -120,7 +120,7 @@ Output JSON shape:
       "confidence": 0.92,
       "expectedEffect": "submit",
       "supported": true,
-      "unsupportedReason": "optional",
+      "unsupportedReason": "only include when supported is false",
       "evidence": [{"kind":"role","value":"button"}]
     }
   ]
@@ -138,4 +138,3 @@ Rules:
 Snapshot:
 ${JSON.stringify(snapshot, null, 2)}`;
 }
-

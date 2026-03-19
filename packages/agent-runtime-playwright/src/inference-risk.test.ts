@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyInferenceRiskRules } from './inference-risk.js';
+import { applyInferenceRiskRules, sanitizeUnsupportedReason } from './inference-risk.js';
 import type { DiscoverySnapshot, RawInferredAction } from './inference-prompt.js';
 
 const SNAPSHOT: DiscoverySnapshot = {
@@ -32,6 +32,12 @@ const SNAPSHOT: DiscoverySnapshot = {
 };
 
 describe('applyInferenceRiskRules', () => {
+  it('drops placeholder unsupported reasons', () => {
+    expect(sanitizeUnsupportedReason('optional')).toBeUndefined();
+    expect(sanitizeUnsupportedReason('required')).toBeUndefined();
+    expect(sanitizeUnsupportedReason('Primary target lacks an accessible name')).toBe('Primary target lacks an accessible name');
+  });
+
   it('blocks high-risk destructive actions', () => {
     const action: RawInferredAction = {
       action: 'page.delete_account',
@@ -77,4 +83,3 @@ describe('applyInferenceRiskRules', () => {
     expect(result.risk).toBe('low');
   });
 });
-

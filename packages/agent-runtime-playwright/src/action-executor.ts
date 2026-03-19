@@ -463,7 +463,7 @@ export class PlaywrightAdapter implements AAFAdapter {
 
   private validateInferred(action: DiscoveredAction, args: Record<string, unknown>): AAFValidationResult {
     if (action.supported === false) {
-      return { valid: false, errors: [action.unsupportedReason || 'Inferred action is not supported'] };
+      return { valid: false, errors: [this.describeUnsupportedInferredAction(action)] };
     }
 
     const fieldMap = new Map(action.fields.map((field) => [field.field, field]));
@@ -497,5 +497,24 @@ export class PlaywrightAdapter implements AAFAdapter {
     }
 
     return { valid: true, errors: [] };
+  }
+
+  private describeUnsupportedInferredAction(action: DiscoveredAction): string {
+    const reason = action.unsupportedReason?.trim();
+    if (reason) return reason;
+
+    if (action.risk === 'high' || action.danger === 'high') {
+      return 'This inferred action is blocked because it appears high-risk.';
+    }
+
+    if (action.intent === 'search' || action.intent === 'submit' || action.intent === 'authenticate') {
+      return 'This inferred form action is blocked because the submit target could not be grounded confidently.';
+    }
+
+    if (action.intent === 'toggle') {
+      return 'This inferred toggle action is blocked because the target control could not be grounded confidently.';
+    }
+
+    return 'This inferred action is blocked because the target could not be grounded confidently.';
   }
 }
