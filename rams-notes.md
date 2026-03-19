@@ -81,6 +81,60 @@ aaf> apply for the program
 
 This is the strongest point-in-time validation so far because it worked on a non-AAF public website rather than only on synthetic fixtures.
 
+### Real-Site Negative Case
+
+The flow was also tried on:
+
+- `https://www.amazon.com/`
+
+Observed result:
+
+- no AAF manifest was present
+- the system classified the page as e-commerce / homepage
+- it inferred a plausible `search.submit` action
+- the search field itself was found
+- but the action was not executable because the inferred primary target was treated as lacking an accessible name
+- the planner still selected that action, and execution failed with validation output
+
+Observed CLI output:
+
+```text
+[browser] Launching visible browser...
+[manifest] Fetching https://www.amazon.com/.well-known/agent-manifest.json
+! No agent manifest found at https://www.amazon.com/.well-known/agent-manifest.json
+[navigate] https://www.amazon.com
+
+[discover] Found 1 action(s) on https://www.amazon.com/ [inferred]
+  context: e-commerce / homepage (0.95)
+  summary: The homepage of Amazon, featuring various product categories, promotional content, and a search functionality.
+  search.submit (source:inferred, risk:low, confirm:optional, confidence:0.92)
+    unsupported: Primary target lacks an accessible name
+    field: query <search>
+
+Type a command in natural language, or "help" for options.
+
+aaf> search for manchego cheese
+[plan] Asking gpt-4o-mini to map: "search for manchego cheese"
+✓ Planned: search.submit
+  args: {"query":"manchego cheese"}
+
+✗ Status: validation_error
+✗ Error: optional
+```
+
+What this suggests:
+
+- the current system can often infer the right high-level action even on large production sites
+- but target grounding is still fragile on complex commercial pages
+- large sites with layered navigation, custom controls, or ambiguous submit elements are still a weak spot
+- the current safety checks are doing their job by refusing to execute when the target is not grounded confidently enough
+
+This is a useful failure, not a useless one. It shows:
+
+- the classification and intent inference are reasonably strong
+- the current bottleneck is reliable execution grounding on complex sites
+- the next improvements should focus more on target resolution and execution recovery than on basic page understanding
+
 ## Important Constraint
 
 The inferred-action system currently operates page by page.
@@ -118,6 +172,7 @@ Weak current fits:
 
 - highly custom widget libraries with weak accessibility
 - multi-step workflows
+- large production sites with layered/custom commerce UI
 - file uploads
 - rich text editors
 - drag/drop interfaces
@@ -156,7 +211,7 @@ Most useful next steps from here:
 1. Test on more real public websites.
 2. Expand support for dialogs, tabs, and table/filter flows.
 3. Improve result/status detection on arbitrary pages.
-4. Improve behavior on more complex accessible component libraries.
+4. Improve behavior on more complex accessible component libraries and large production websites.
 5. Keep the inferred path page-local unless there is a strong reason to broaden scope.
 
 ## Bottom Line
