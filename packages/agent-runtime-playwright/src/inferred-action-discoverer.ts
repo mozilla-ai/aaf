@@ -126,7 +126,36 @@ export function parseInference(raw: string): RawInferenceResult {
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.actions)) {
     throw new Error('Inference response is missing actions array');
   }
-  return parsed;
+  return {
+    ...parsed,
+    siteType: typeof parsed.siteType === 'string' ? parsed.siteType : 'unknown',
+    pageType: typeof parsed.pageType === 'string' ? parsed.pageType : 'unknown',
+    summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+    confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0,
+    actions: parsed.actions
+      .filter((action): action is RawInferredAction => Boolean(action && typeof action === 'object'))
+      .map((action) => ({
+        ...action,
+        action: typeof action.action === 'string' ? action.action : 'page.act',
+        title: typeof action.title === 'string' ? action.title : 'Unnamed action',
+        kind: 'action',
+        intent: normalizeIntent(action.intent),
+        targetIds: Array.isArray(action.targetIds) ? action.targetIds.filter((id): id is string => typeof id === 'string') : [],
+        fields: Array.isArray(action.fields) ? action.fields.filter((field): field is RawInferredAction['fields'][number] => Boolean(field && typeof field === 'object' && typeof field.field === 'string' && typeof field.elementId === 'string')) : [],
+        risk: action.risk === 'high' || action.risk === 'none' ? action.risk : 'low',
+        confirmation: action.confirmation === 'never' || action.confirmation === 'review' || action.confirmation === 'required'
+          ? action.confirmation
+          : 'optional',
+        idempotent: Boolean(action.idempotent),
+        confidence: typeof action.confidence === 'number' ? action.confidence : 0,
+        expectedEffect: action.expectedEffect === 'navigate' || action.expectedEffect === 'submit' || action.expectedEffect === 'mutate' || action.expectedEffect === 'toggle' || action.expectedEffect === 'open'
+          ? action.expectedEffect
+          : 'unknown',
+        supported: action.supported !== false,
+        unsupportedReason: typeof action.unsupportedReason === 'string' ? action.unsupportedReason : undefined,
+        evidence: Array.isArray(action.evidence) ? action.evidence.filter((item): item is { kind: string; value: string } => Boolean(item && typeof item.kind === 'string' && typeof item.value === 'string')) : [],
+      })),
+  };
 }
 
 export interface InferredDiscoveryResult {
@@ -149,7 +178,7 @@ function resolveTargetIds(action: RawInferredAction, snapshot: DiscoverySnapshot
     return action.targetIds;
   }
 
-  const fieldNodes = action.fields
+  const fieldNodes = (action.fields || [])
     .map((field) => snapshot.interactives.find((node) => node.elementId === field.elementId))
     .filter((node): node is DiscoverySnapshot['interactives'][number] => Boolean(node));
   const formIds = Array.from(new Set(fieldNodes.map((node) => node.formId).filter((value): value is string => Boolean(value))));
@@ -186,7 +215,7 @@ export function normalizeInferenceResult(
       .map((id) => snapshot.interactives.find((node) => node.elementId === id)?.selector)
       .filter((selector): selector is string => Boolean(selector));
 
-    const fields: DiscoveredField[] = normalized.fields.map((field) => {
+    const fields: DiscoveredField[] = (normalized.fields || []).map((field) => {
       const node = snapshot.interactives.find((interactive) => interactive.elementId === field.elementId);
       return {
         field: field.field,
@@ -199,7 +228,7 @@ export function normalizeInferenceResult(
       };
     });
 
-    const resolvedFields: ResolvedInferredField[] = normalized.fields.map((field) => {
+    const resolvedFields: ResolvedInferredField[] = (normalized.fields || []).map((field) => {
       const selector = snapshot.interactives.find((interactive) => interactive.elementId === field.elementId)?.selector || '';
       return {
         field: field.field,

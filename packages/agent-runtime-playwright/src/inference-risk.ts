@@ -17,7 +17,7 @@ export function applyInferenceRiskRules(
   const targetText = [
     action.title,
     action.description,
-    ...action.evidence.map((item) => item.value),
+    ...(action.evidence || []).map((item) => item.value),
     ...targetNodes.flatMap((node) => [node?.name, node?.text, node?.href]),
   ].filter(Boolean).join(' ');
 
@@ -50,7 +50,7 @@ export function applyInferenceRiskRules(
     next.unsupportedReason = next.unsupportedReason || 'Action references unknown elements';
   }
 
-  for (const field of next.fields) {
+  for (const field of next.fields || []) {
     if (field.controlType && !SUPPORTED_CONTROL_TYPES.has(field.controlType)) {
       next.supported = false;
       next.unsupportedReason = next.unsupportedReason || `Unsupported control type "${field.controlType}"`;
@@ -82,7 +82,7 @@ export function applyInferenceRiskRules(
 export function toEvidence(
   action: RawInferredAction,
 ): DiscoveredAction['evidence'] {
-  return action.evidence
+  return (action.evidence || [])
     .filter((entry): entry is { kind: 'role' | 'name' | 'label' | 'heading' | 'landmark' | 'url' | 'text'; value: string } =>
       ['role', 'name', 'label', 'heading', 'landmark', 'url', 'text'].includes(entry.kind) && Boolean(entry.value))
     .map((entry) => ({ kind: entry.kind, value: entry.value }));

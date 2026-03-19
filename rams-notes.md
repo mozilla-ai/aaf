@@ -293,6 +293,77 @@ That confirmed:
 - execution worked
 - the submit event propagated into visible page state
 
+## Real-Site Validation
+
+We also ran the inferred-action flow against a real public site:
+
+- `https://macss.uchicago.edu/`
+
+Observed CLI output:
+
+```text
+[browser] Launching visible browser...
+[manifest] Fetching https://macss.uchicago.edu/.well-known/agent-manifest.json
+! No agent manifest found at https://macss.uchicago.edu/.well-known/agent-manifest.json
+[navigate] https://macss.uchicago.edu
+
+[discover] Found 3 action(s) on https://macss.uchicago.edu/ [inferred]
+  context: educational / program homepage (0.95)
+  summary: The Masters in Computational Social Science program at the University of Chicago provides information about the program, application process, and related resources.
+  apply.submit (source:inferred, risk:low, confirm:optional, confidence:0.90)
+  request.info (source:inferred, risk:low, confirm:optional, confidence:0.88)
+  view.news (source:inferred, risk:low, confirm:optional, confidence:0.85)
+
+Type a command in natural language, or "help" for options.
+
+aaf> apply for the program
+[plan] Asking gpt-4o-mini to map: "apply for the program"
+✓ Planned: apply.submit
+  args: {}
+
+✓ Status: completed
+✓ Result: submitted inferred action "apply.submit"
+```
+
+This matters because it shows the system is not limited to the synthetic fixtures.
+
+It successfully:
+
+- ran on a non-AAF public website
+- classified the page
+- inferred multiple plausible semantic actions
+- planned from natural language
+- executed one of those actions successfully
+
+That is a stronger validation than the local fixtures because the page structure was not tailored to this prototype.
+
+## Important Constraint: Current Page Only
+
+Right now, the inferred-action system is page-by-page.
+
+That means:
+
+- it only reasons over the current page
+- it only discovers actions from the currently loaded DOM
+- it does not build a multi-page site map for arbitrary non-AAF sites
+
+This is a limitation, but it is also aligned with the likely product direction.
+
+If this becomes a browser extension, the natural operating model is:
+
+- inspect the current page
+- infer the current page's accessible actions
+- execute on the current page
+
+That makes the current architecture reasonable for the expected end goal.
+
+In other words:
+
+- for AAF sites, cross-page/site-aware operation still makes sense because the manifest can describe off-page actions
+- for arbitrary unannotated sites, current-page inference is the realistic and appropriate scope
+
+So the current limitation is not just acceptable, it is probably the right boundary for a browser-extension version of this feature.
+
 ## How Hard-Coded It Is
 
 This is not hard-coded to only one page or one workflow.
