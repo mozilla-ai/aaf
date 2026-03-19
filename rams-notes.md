@@ -1,303 +1,57 @@
 # Ram's Notes
 
-## What We Built
+## Current Status
 
-We added a Playwright-first fallback path for arbitrary, unannotated webpages.
+AAF now has a working Playwright-first fallback for arbitrary unannotated pages.
 
-Before this change, the system only worked on pages that exposed AAF semantics:
+Current behavior:
 
-- `data-agent-*` DOM annotations
-- manifest-driven action definitions
-- explicit semantic action and field names
+- if a page has AAF annotations, the existing AAF path is used
+- if a page does not have AAF annotations, the runtime can infer semantic actions from the current page when an LLM backend is configured
+- this works through the Playwright runtime and the CLI
+- the widget has not been updated
 
-After this change, the runtime can now do this:
+## What Was Added
 
-1. Detect whether the page is AAF-annotated.
-2. If yes, use the existing AAF path unchanged.
-3. If not, and an LLM backend is configured, infer possible actions from:
-   - Playwright ARIA snapshot data
-   - DOM heuristics
-   - visible controls and form structure
-4. Normalize those inferred actions into semantic action names.
-5. Validate and execute only safe supported actions.
+The project now supports:
 
-This was implemented in the Playwright runtime and the CLI.
+- inferred action discovery on unannotated pages
+- semantic action naming for inferred actions
+- safe execution of common inferred actions
+- visible-browser manual testing through the CLI
+- OpenAI-compatible and Ollama-backed inference for the CLI path
 
-The widget was not changed.
+## What Was Validated
 
-## Main Files Added or Changed
+### Local Fixture Validation
 
-### Runtime Core
+The unannotated fixture pages were exercised successfully:
 
-- `packages/agent-runtime-core/src/types.ts`
+- login page
+- search page
+- settings/toggle page
+- destructive page
 
-Extended the shared action catalog types to support inferred-action metadata such as:
-
-- `source`
-- `risk`
-- `confirmation`
-- `intent`
-- `confidence`
-- `supported`
-- `unsupportedReason`
-- `siteType`
-- `pageType`
-- `evidence`
-- field `label`
-- field `controlType`
-- catalog `discoveryMode`
-- catalog `pageContext`
-
-### Playwright Runtime
-
-- `packages/agent-runtime-playwright/src/action-executor.ts`
-- `packages/agent-runtime-playwright/src/accessibility-extractor.ts`
-- `packages/agent-runtime-playwright/src/dom-affordance-extractor.ts`
-- `packages/agent-runtime-playwright/src/inference-prompt.ts`
-- `packages/agent-runtime-playwright/src/inference-risk.ts`
-- `packages/agent-runtime-playwright/src/inferred-action-discoverer.ts`
-- `packages/agent-runtime-playwright/src/inferred-action-executor.ts`
-
-These files added the arbitrary-page inference path.
-
-### CLI
-
-- `packages/aaf-cli/src/cli.ts`
-- `packages/aaf-cli/src/llm-config.ts`
-
-The CLI now:
-
-- supports AAF pages as before
-- supports inferred discovery on unannotated pages
-- supports Ollama or OpenAI-compatible backends
-- can run with a visible browser for manual testing
-
-### Planner Backend
-
-- `packages/aaf-planner-local/src/openai-backend.ts`
-
-Added `currentModel()` and `setModel()` support for consistency with the shared backend abstraction.
-
-### Tests and Fixtures
-
-Added tests:
-
-- `packages/agent-runtime-playwright/src/inference-risk.test.ts`
-- `packages/agent-runtime-playwright/src/inferred-action-discoverer.test.ts`
-- `packages/aaf-cli/src/llm-config.test.ts`
-
-Added fixtures:
-
-- `tests/falsification/fixtures/unannotated-search/index.html`
-- `tests/falsification/fixtures/unannotated-login/index.html`
-- `tests/falsification/fixtures/unannotated-settings/index.html`
-- `tests/falsification/fixtures/unannotated-danger/index.html`
-
-The login fixture was later updated to visibly render:
+The login flow was verified visually by updating the page so that successful submit renders:
 
 - `hello <email>`
 
-on successful submit, so manual testing is obvious in the browser.
+This confirmed that inference, planning, filling, and submit propagation all worked end to end.
 
-## How It Works
+### Real-Site Validation
 
-### 1. Discovery Mode Selection
-
-`PlaywrightAdapter` now has two modes:
-
-- AAF mode
-- inferred mode
-
-Default behavior:
-
-- if AAF is present, prefer AAF
-- otherwise, if an LLM backend exists, run inferred discovery
-
-### 2. Page Snapshot Extraction
-
-The inferred path extracts:
-
-- page URL
-- title
-- headings
-- landmarks
-- forms
-- interactive controls
-- visible page text
-- ARIA snapshot summary
-
-The DOM extractor assigns internal element IDs like:
-
-- `el_1`
-- `el_2`
-
-These are temporary internal identifiers for one discovery pass only.
-
-### 3. LLM Action Inference
-
-The LLM receives a structured page snapshot, not raw HTML.
-
-It is asked to return:
-
-- site type
-- page type
-- summary
-- confidence
-- action list with semantic names, fields, targets, risk, and evidence
-
-### 4. Normalization
-
-The runtime then normalizes the model output:
-
-- intent aliases like `login`, `auth`, `sign_in` -> `authenticate`
-- semantic action names are made planner-safe
-- duplicate names are deduplicated
-- form actions can recover the real submit button if the model picks the wrong target
-
-### 5. Safety Filtering
-
-Deterministic risk rules are applied after the model response.
-
-Examples of actions forced unsupported:
-
-- delete/remove/destroy
-- purchase/pay/checkout
-- reset/revoke/close account
-
-Unsupported actions are blocked at validation/execution time.
-
-### 6. Execution
-
-Supported inferred actions can currently execute:
-
-- links
-- buttons
-- simple form submit flows
-- toggles like checkboxes/radios
-
-Supported field types:
-
-- text
-- email
-- password
-- search
-- number
-- date
-- textarea
-- select
-- checkbox
-- radio
-
-## What We Debugged
-
-This feature did not work end-to-end on the first pass. These were the main issues fixed:
-
-### 1. Node Version / Dependency Compatibility
-
-Initial tests failed because the environment was on Node `20.8.0` while installed packages expected newer Node 20 versions.
-
-We updated Node via Homebrew to:
-
-- `v20.20.1`
-
-This fixed the `jsdom` / ESM dependency failures in the test suite.
-
-### 2. Playwright Accessibility API Mismatch
-
-Initial runtime code used:
-
-- `page.accessibility.snapshot()`
-
-That API was not available in the installed Playwright version.
-
-We replaced it with:
-
-- `page.locator('body').ariaSnapshot()`
-
-and parsed the resulting ARIA snapshot text into the summary format we needed.
-
-### 3. Browser `page.evaluate` Helper Leakage
-
-The DOM extractor initially crashed in the browser context with:
-
-- `ReferenceError: __name is not defined`
-
-Cause:
-
-- compiled helper code leaked into the function serialized into `page.evaluate`
-
-Fix:
-
-- replaced that evaluator with raw browser-side JavaScript source and a trampoline
-
-### 4. Misleading CLI Startup Error
-
-The CLI reported:
-
-- `No AAF annotations found and no LLM backend configured for inferred discovery.`
-
-even when the backend had actually been called successfully.
-
-Fix:
-
-- changed CLI startup logic to only print that message when no backend actually exists
-- otherwise call `discover()` directly and inspect the resulting catalog
-
-### 5. Intent Alias Mismatch
-
-The model returned intent values like:
-
-- `login`
-
-but the runtime expected canonical values like:
-
-- `authenticate`
-
-Fix:
-
-- added intent normalization
-
-### 6. False Unsupported State
-
-The model returned a login action that was actually usable, but it selected the wrong submit target.
-
-That caused the runtime to mark the action unsupported and surface:
-
-- `optional`
-
-as a bogus validation error.
-
-Fix:
-
-- ignore placeholder unsupported reasons like `optional`
-- recover the form's actual submit button from form structure when the model picks a bad target
-
-## Manual Demo Flow
-
-This is the path that was manually verified:
-
-1. Serve fixture pages locally.
-2. Run the CLI with a visible Playwright browser.
-3. Point it at the unannotated login fixture.
-4. Use an OpenAI-compatible backend.
-5. Type a natural-language login command.
-6. Watch the browser fill and submit the form.
-7. Confirm visible output:
-   - `hello alice@example.com`
-
-That confirmed:
-
-- inferred discovery worked
-- planning worked
-- form fill worked
-- execution worked
-- the submit event propagated into visible page state
-
-## Real-Site Validation
-
-We also ran the inferred-action flow against a real public site:
+The flow was also run successfully on a real public site:
 
 - `https://macss.uchicago.edu/`
+
+Observed result:
+
+- no AAF manifest was present
+- the runtime still inferred actions on the homepage
+- the page was classified as an educational/program homepage
+- multiple semantic actions were inferred
+- the command `apply for the program` mapped to `apply.submit`
+- execution completed successfully
 
 Observed CLI output:
 
@@ -325,136 +79,91 @@ aaf> apply for the program
 ✓ Result: submitted inferred action "apply.submit"
 ```
 
-This matters because it shows the system is not limited to the synthetic fixtures.
+This is the strongest point-in-time validation so far because it worked on a non-AAF public website rather than only on synthetic fixtures.
 
-It successfully:
+## Important Constraint
 
-- ran on a non-AAF public website
-- classified the page
-- inferred multiple plausible semantic actions
-- planned from natural language
-- executed one of those actions successfully
-
-That is a stronger validation than the local fixtures because the page structure was not tailored to this prototype.
-
-## Important Constraint: Current Page Only
-
-Right now, the inferred-action system is page-by-page.
+The inferred-action system currently operates page by page.
 
 That means:
 
-- it only reasons over the current page
-- it only discovers actions from the currently loaded DOM
-- it does not build a multi-page site map for arbitrary non-AAF sites
+- it reasons over the current page only
+- it discovers actions from the currently loaded DOM only
+- it does not build a cross-page capability map for arbitrary non-AAF sites
 
-This is a limitation, but it is also aligned with the likely product direction.
+This is still a reasonable product boundary, especially if the intended destination is a browser extension. In that model, current-page inference is likely the correct scope.
 
-If this becomes a browser extension, the natural operating model is:
+## Current Strengths
 
-- inspect the current page
-- infer the current page's accessible actions
-- execute on the current page
-
-That makes the current architecture reasonable for the expected end goal.
-
-In other words:
-
-- for AAF sites, cross-page/site-aware operation still makes sense because the manifest can describe off-page actions
-- for arbitrary unannotated sites, current-page inference is the realistic and appropriate scope
-
-So the current limitation is not just acceptable, it is probably the right boundary for a browser-extension version of this feature.
-
-## How Hard-Coded It Is
-
-This is not hard-coded to only one page or one workflow.
-
-But it is intentionally constrained.
-
-### Flexible Parts
-
-- page classification is model-driven
-- action discovery is model-driven
-- semantic action naming is derived from inferred intent and page context
-- field extraction is structural, not page-specific
-- works on unannotated pages that expose usable accessible/visible controls
-
-### Hard-Coded Parts
-
-- supported execution categories are deliberately narrow
-- risk detection uses explicit keyword heuristics
-- execution logic only supports common native controls
-- complex custom widgets are not generally supported
-- destructive/payment/irreversible actions are blocked
-
-### Good Current Fits
+Good current fits:
 
 - login pages
 - search forms
-- settings pages
+- settings/toggle pages
 - simple create/update forms
 - obvious links and buttons
 
-### Weak Current Fits
+Positive qualities:
 
-- highly custom component libraries with weak accessibility
-- multi-step transactional flows
+- works on unannotated pages
+- produces semantic actions instead of selectors
+- can be tested in a real visible browser
+- has conservative safety behavior
+
+## Current Limitations
+
+This is not universal arbitrary-web automation yet.
+
+Weak current fits:
+
+- highly custom widget libraries with weak accessibility
+- multi-step workflows
 - file uploads
 - rich text editors
-- drag/drop UIs
+- drag/drop interfaces
 - canvas-heavy interfaces
 - payment flows
-- destructive admin workflows
+- destructive admin flows
 
-## Current Status
+It should currently be understood as:
 
-### What Passes
+- useful inferred fallback for common accessible interactions
+- not a replacement for explicit AAF semantics
 
-The new inferred-discovery tests pass.
+## Environment / Test Status
 
-The full suite also became mostly green after the Node upgrade.
+Node was updated to:
 
-The remaining failing test is unrelated to this feature:
+- `v20.20.1`
 
-- `packages/aaf-lint/src/cli.test.ts`
+This resolved earlier dependency/runtime issues seen during testing.
 
-It assumes a temporary git repo has a `main` branch, but the test repo initializes with `master`.
+At the current point in time:
 
-### What Works End-to-End
+- the new inferred-discovery tests pass
+- the manual fixture demos work
+- the real-site demo works
+- the full suite is mostly green
 
-Confirmed working manually:
+Remaining known unrelated test issue:
 
-- inferred discovery on unannotated login page
-- semantic action generation
-- natural-language planning
-- Playwright execution
-- visible browser confirmation
+- one `aaf-lint` CLI test still assumes a `main` branch exists in a temp git repo, but the repo initializes as `master`
 
-## Next Good Extensions
+## Near-Term Next Steps
 
-If this is continued, the most valuable next steps are:
+Most useful next steps from here:
 
-1. Add better support for dialogs, tabs, and table/filter flows.
-2. Improve status/result detection on arbitrary pages.
-3. Expand inferred execution patterns for more accessible component libraries.
-4. Add more manual demo fixtures beyond login/search/settings.
-5. Add stronger schema/type validation for inferred fields.
-6. Improve LLM prompt constraints for target selection and action support decisions.
+1. Test on more real public websites.
+2. Expand support for dialogs, tabs, and table/filter flows.
+3. Improve result/status detection on arbitrary pages.
+4. Improve behavior on more complex accessible component libraries.
+5. Keep the inferred path page-local unless there is a strong reason to broaden scope.
 
 ## Bottom Line
 
-We now have a real inferred-action fallback for arbitrary, unannotated pages in the Playwright runtime.
+Point-in-time summary:
 
-It is:
-
-- useful
-- demonstrably working
-- reasonably safe for common accessible interactions
-- not universal
-- architecturally extensible
-
-It should be thought of as:
-
-- explicit semantics when available
-- inferred semantics as a fallback
-
-not as a replacement for AAF.
+- inferred semantic actions for arbitrary unannotated pages are now working in the Playwright runtime
+- the feature has been validated both on local fixtures and on a real public site
+- it is practical for common accessible interactions
+- it remains intentionally constrained and page-local
