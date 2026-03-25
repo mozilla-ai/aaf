@@ -17,7 +17,7 @@ import {
   type DiscoveredAction,
 } from '@agent-accessibility-framework/runtime-core';
 import { InferredActionDiscoverer } from './inferred-action-discoverer.js';
-import { InferredActionExecutor, type ResolvedInferredAction } from './inferred-action-executor.js';
+import { InferredActionExecutor, canPartiallyExecute, type ResolvedInferredAction } from './inferred-action-executor.js';
 
 export interface ExecuteActionOptions {
   actionName: string;
@@ -390,7 +390,12 @@ export class PlaywrightAdapter implements AAFAdapter {
       if (!resolved) {
         return { status: 'execution_error', error: `Inferred action "${actionName}" is not available` };
       }
-      return this.inferredExecutor.execute(this.page, resolved, args);
+      const result = await this.inferredExecutor.execute(this.page, resolved, args);
+      if (this.lastCatalog?.discoveryMode === 'inferred'
+        && (result.status === 'completed' || result.status === 'awaiting_review')) {
+        await this.discover();
+      }
+      return result;
     }
 
     try {
@@ -462,7 +467,8 @@ export class PlaywrightAdapter implements AAFAdapter {
   }
 
   private validateInferred(action: DiscoveredAction, args: Record<string, unknown>): AAFValidationResult {
-    if (action.supported === false) {
+    const resolved = this.inferredExecutionMap.get(action.action);
+    if (action.supported === false && !(resolved && canPartiallyExecute(resolved))) {
       return { valid: false, errors: [this.describeUnsupportedInferredAction(action)] };
     }
 

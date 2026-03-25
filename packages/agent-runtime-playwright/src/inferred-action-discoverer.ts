@@ -228,24 +228,26 @@ export function normalizeInferenceResult(
       };
     });
 
-    const resolvedFields: ResolvedInferredField[] = (normalized.fields || []).map((field) => {
-      const selector = snapshot.interactives.find((interactive) => interactive.elementId === field.elementId)?.selector || '';
-      return {
-        field: field.field,
-        selector,
-        controlType: mapControlType(field, snapshot.interactives.find((interactive) => interactive.elementId === field.elementId)?.type),
-        ...(field.enumValues?.length ? { enumValues: field.enumValues } : {}),
-        ...(field.required !== undefined ? { required: field.required } : {}),
-      };
-    });
+      const resolvedFields: ResolvedInferredField[] = (normalized.fields || []).map((field) => {
+        const selector = snapshot.interactives.find((interactive) => interactive.elementId === field.elementId)?.selector || '';
+        return {
+          field: field.field,
+          selector,
+          controlType: mapControlType(field, snapshot.interactives.find((interactive) => interactive.elementId === field.elementId)?.type),
+          ...(field.enumValues?.length ? { enumValues: field.enumValues } : {}),
+          ...(field.required !== undefined ? { required: field.required } : {}),
+          ...(field.label ? { label: field.label } : {}),
+        };
+      });
 
-    resolvedActions.set(actionName, {
-      action: actionName,
-      title: normalized.title,
-      targetSelectors,
-      submitSelector: targetSelectors[0],
-      fields: resolvedFields,
-      intent: normalized.intent || 'unknown',
+      resolvedActions.set(actionName, {
+        action: actionName,
+        title: normalized.title,
+        targetSelectors,
+        submitSelector: targetSelectors[0],
+        fields: resolvedFields,
+        intent: normalized.intent || 'unknown',
+        risk: normalized.risk,
         supported: normalized.supported,
         ...(normalized.supported === false && normalized.unsupportedReason ? { unsupportedReason: normalized.unsupportedReason } : {}),
       });

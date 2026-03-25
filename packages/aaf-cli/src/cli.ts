@@ -100,7 +100,7 @@ async function runCommand(
   manifest: AgentManifest | null,
   page: Page,
   baseUrl: string,
-) {
+): Promise<ActionCatalog> {
   try {
     const model = backend.currentModel?.() || backend.name();
     log('plan', `Asking ${model} to map: "${command}"`);
@@ -109,15 +109,17 @@ async function runCommand(
     if (plan.kind === 'answer') {
       success(plan.text);
       console.log();
-      return;
+      return catalog;
     }
 
     if (plan.kind === 'navigate') {
       const target = plan.page.startsWith('http') ? plan.page : `${baseUrl}${plan.page}`;
       log('navigate', target);
       await navigateTo(page, target);
+      const nextCatalog = await adapter.discover();
+      printCatalog(nextCatalog);
       console.log();
-      return;
+      return nextCatalog;
     }
 
     const actionName = plan.request.action;
@@ -146,18 +148,34 @@ async function runCommand(
     });
 
     console.log();
+    if (result.execution_details?.length) {
+      for (const detail of result.execution_details) {
+        log('act', detail);
+      }
+      console.log();
+    }
     if (result.status === 'completed') {
       success('Status: completed');
       if (result.result) success(`Result: ${result.result}`);
+    } else if (result.status === 'awaiting_review') {
+      warn('Status: awaiting_review');
+      if (result.result) warn(`Result: ${result.result}`);
     } else {
       error(`Status: ${result.status}`);
       if (result.error) error(`Error: ${result.error}`);
       if (result.missing_fields?.length) error(`Missing fields: ${result.missing_fields.join(', ')}`);
     }
     console.log();
+    if (catalog.discoveryMode === 'inferred') {
+      const nextCatalog = await adapter.discover();
+      printCatalog(nextCatalog);
+      return nextCatalog;
+    }
+    return catalog;
   } catch (err) {
     error(`Failed: ${(err as Error).message}`);
     console.log();
+    return catalog;
   }
 }
 
@@ -274,7 +292,7 @@ async function main() {
         }
 
         catalog = await adapter.discover();
-        await runCommand(adapter, backend, trimmed, catalog, manifest, page, baseUrl);
+        catalog = await runCommand(adapter, backend, trimmed, catalog, manifest, page, baseUrl);
         promptUser();
       });
     };

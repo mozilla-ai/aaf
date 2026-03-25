@@ -177,6 +177,7 @@ export interface ExecutionResult {
   status: 'completed' | 'awaiting_review' | 'needs_confirmation' | 'validation_error' | 'execution_error' | 'missing_required_fields';
   result?: string;
   log?: ExecutionLog;
+  execution_details?: string[];
   confirmation_metadata?: {
     action: string;
     risk: string;
