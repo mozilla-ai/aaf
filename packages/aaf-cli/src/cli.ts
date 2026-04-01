@@ -77,6 +77,7 @@ function printCatalog(catalog: ActionCatalog) {
   for (const action of catalog.actions) {
     const tags: string[] = [];
     if (action.source) tags.push(`source:${action.source}`);
+    tags.push(action.supported === false ? 'supported:no' : 'supported:yes');
     if (action.risk || action.danger) tags.push(`risk:${action.risk || action.danger}`);
     if (action.confirmation || action.confirm) tags.push(`confirm:${action.confirmation || action.confirm}`);
     if (action.confidence !== undefined) tags.push(`confidence:${action.confidence.toFixed(2)}`);

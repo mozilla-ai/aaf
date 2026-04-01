@@ -10,6 +10,22 @@ export interface ResolvedInferredField {
   label?: string;
 }
 
+export interface ResolvedInferredCollectionScope {
+  collectionId: string;
+  collectionSelector: string;
+  itemSelectorById: Record<string, string>;
+  itemSummaries: Array<{
+    itemId: string;
+    title: string;
+    summary: string;
+    keyTexts: string[];
+    interactiveIds: string[];
+  }>;
+  itemRefField: string;
+  targetRole?: string;
+  targetName?: string;
+}
+
 export interface ResolvedInferredAction {
   action: string;
   title?: string;
@@ -20,6 +36,7 @@ export interface ResolvedInferredAction {
   risk?: 'none' | 'low' | 'high';
   supported: boolean;
   unsupportedReason?: string;
+  collectionScope?: ResolvedInferredCollectionScope;
 }
 
 async function firstLocator(page: Page, selectors: string[]): Promise<Locator | null> {
@@ -47,8 +64,30 @@ async function describeLocator(locator: Locator, fallback: string): Promise<stri
   }
 }
 
+function normalize(value: string | undefined): string {
+  return (value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function findCollectionItem(
+  scope: ResolvedInferredCollectionScope,
+  rawValue: unknown,
+): ResolvedInferredCollectionScope['itemSummaries'][number] | null {
+  const needle = normalize(typeof rawValue === 'string' ? rawValue : String(rawValue ?? ''));
+  if (!needle) return null;
+
+  const exact = scope.itemSummaries.find((item) =>
+    [item.title, item.summary, ...item.keyTexts].some((value) => normalize(value) === needle));
+  if (exact) return exact;
+
+  const partialMatches = scope.itemSummaries.filter((item) =>
+    [item.title, item.summary, ...item.keyTexts].some((value) => normalize(value).includes(needle)));
+  if (partialMatches.length === 1) return partialMatches[0];
+  return null;
+}
+
 export function canPartiallyExecute(action: ResolvedInferredAction): boolean {
   return action.supported === false
+    && !action.collectionScope
     && action.risk !== 'high'
     && action.fields.length > 0;
 }
@@ -65,8 +104,67 @@ export class InferredActionExecutor {
     }
 
     const executionDetails: string[] = [];
+    let targetSelectors = action.targetSelectors;
+    let submitSelector = action.submitSelector;
+
+    if (action.collectionScope) {
+      const itemRef = args[action.collectionScope.itemRefField];
+      const match = findCollectionItem(action.collectionScope, itemRef);
+      if (!match) {
+        return {
+          status: 'validation_error',
+          error: `Could not uniquely resolve item reference for "${action.action}"`,
+        };
+      }
+      const itemSelector = action.collectionScope.itemSelectorById[match.itemId];
+      if (!itemSelector) {
+        return {
+          status: 'execution_error',
+          error: `Resolved item target missing for "${action.action}"`,
+        };
+      }
+
+      const scopedSelector = await page.evaluate(
+        ({ itemSelector, role, name }) => {
+          const root = document.querySelector(itemSelector);
+          if (!root) return null;
+          const normalized = (value: string | null | undefined) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+          const candidates = Array.from(root.querySelectorAll('button, a[href], [role="button"], [role="link"]'));
+          const roleNeedle = normalized(role);
+          const nameNeedle = normalized(name);
+          for (const el of candidates) {
+            const elementRole = normalized(el.getAttribute('role') || el.tagName.toLowerCase());
+            const elementName = normalized(el.getAttribute('aria-label') || el.textContent || '');
+            const roleMatch = !roleNeedle || elementRole === roleNeedle || (roleNeedle === 'button' && elementRole === 'a');
+            const nameMatch = !nameNeedle || elementName.includes(nameNeedle);
+            if (roleMatch && nameMatch) {
+              const inferredId = el.getAttribute('data-aaf-inferred-id');
+              if (inferredId) return `[data-aaf-inferred-id="${inferredId}"]`;
+            }
+          }
+          return null;
+        },
+        {
+          itemSelector,
+          role: action.collectionScope.targetRole,
+          name: action.collectionScope.targetName,
+        },
+      );
+
+      if (!scopedSelector) {
+        return {
+          status: 'execution_error',
+          error: `Could not locate scoped collection target for "${action.action}"`,
+        };
+      }
+
+      targetSelectors = [scopedSelector];
+      submitSelector = scopedSelector;
+      executionDetails.push(`resolved ${action.collectionScope.itemRefField} -> ${JSON.stringify(match.title)}`);
+    }
 
     for (const field of action.fields) {
+      if (action.collectionScope && field.field === action.collectionScope.itemRefField) continue;
       const value = args[field.field];
       if (value === undefined) continue;
       const locator = page.locator(field.selector).first();
@@ -134,10 +232,10 @@ export class InferredActionExecutor {
       return { status: 'completed', result: `toggled inferred action "${action.action}"`, execution_details: executionDetails };
     }
 
-    const clickSelector = action.submitSelector ?? action.targetSelectors[0];
-    const locator = await firstLocator(page, clickSelector ? [clickSelector] : action.targetSelectors);
+    const clickSelector = submitSelector ?? targetSelectors[0];
+    const locator = await firstLocator(page, clickSelector ? [clickSelector] : targetSelectors);
     if (!locator) return { status: 'execution_error', error: `Target for "${action.action}" not found` };
-    const label = await describeLocator(locator, clickSelector || action.action);
+    const label = await describeLocator(locator, clickSelector || targetSelectors[0] || action.action);
 
     const beforeUrl = page.url();
     await locator.click();

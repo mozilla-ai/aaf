@@ -1,6 +1,19 @@
-import type { ActionCatalog, DiscoveredAction, DiscoveredField } from '@agent-accessibility-framework/runtime-core';
+import type {
+  ActionCatalog,
+  DiscoveredAction,
+  DiscoveredCollection,
+  DiscoveredCollectionActionTemplate,
+  DiscoveredCollectionItem,
+  DiscoveredField,
+} from '@agent-accessibility-framework/runtime-core';
 import type { LlmBackend } from '@agent-accessibility-framework/planner-local';
-import { buildInferenceSystemPrompt, type DiscoverySnapshot, type RawInferenceResult, type RawInferredAction } from './inference-prompt.js';
+import {
+  buildInferenceSystemPrompt,
+  type CollectionCandidate,
+  type DiscoverySnapshot,
+  type RawInferenceResult,
+  type RawInferredAction,
+} from './inference-prompt.js';
 import { extractAccessibilitySummary } from './accessibility-extractor.js';
 import { extractDomSnapshot } from './dom-affordance-extractor.js';
 import { applyInferenceRiskRules, sanitizeUnsupportedReason, toEvidence } from './inference-risk.js';
@@ -155,12 +168,80 @@ export function parseInference(raw: string): RawInferenceResult {
         unsupportedReason: typeof action.unsupportedReason === 'string' ? sanitizeUnsupportedReason(action.unsupportedReason) : undefined,
         evidence: Array.isArray(action.evidence) ? action.evidence.filter((item): item is { kind: string; value: string } => Boolean(item && typeof item.kind === 'string' && typeof item.value === 'string')) : [],
       })),
+    collections: Array.isArray(parsed.collections)
+      ? parsed.collections
+        .filter((collection) => Boolean(collection && typeof collection === 'object' && typeof collection.collectionId === 'string'))
+        .map((collection) => ({
+          collectionId: collection.collectionId,
+          title: typeof collection.title === 'string' ? collection.title : 'Collection',
+          ...(typeof collection.description === 'string' ? { description: collection.description } : {}),
+          itemKeyFields: Array.isArray(collection.itemKeyFields)
+            ? collection.itemKeyFields.filter((field): field is string => typeof field === 'string')
+            : [],
+          confidence: typeof collection.confidence === 'number' ? collection.confidence : 0,
+          actionTemplates: Array.isArray(collection.actionTemplates)
+            ? collection.actionTemplates
+              .filter((template) => Boolean(template && typeof template === 'object' && typeof template.action === 'string'))
+              .map((template) => ({
+                action: template.action,
+                title: typeof template.title === 'string' ? template.title : 'Item action',
+                ...(typeof template.description === 'string' ? { description: template.description } : {}),
+                intent: normalizeIntent(template.intent),
+                ...(typeof template.targetRole === 'string' ? { targetRole: template.targetRole } : {}),
+                ...(typeof template.targetName === 'string' ? { targetName: template.targetName } : {}),
+                ...(typeof template.confidence === 'number' ? { confidence: template.confidence } : {}),
+                supported: template.supported !== false,
+                ...(typeof template.unsupportedReason === 'string'
+                  ? { unsupportedReason: sanitizeUnsupportedReason(template.unsupportedReason) }
+                  : {}),
+              }))
+            : [],
+        }))
+      : [],
   };
 }
 
 export interface InferredDiscoveryResult {
   catalog: ActionCatalog;
   resolvedActions: Map<string, ResolvedInferredAction>;
+}
+
+function normalized(value: string | undefined): string {
+  return (value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function isLowValueNavigationAction(
+  action: RawInferredAction,
+  snapshot: DiscoverySnapshot,
+): boolean {
+  if (!(action.intent === 'navigate' || action.intent === 'open')) return false;
+  if ((action.fields || []).length > 0) return false;
+  if (action.targetIds.length !== 1) return false;
+
+  const primary = snapshot.interactives.find((node) => node.elementId === action.targetIds[0]);
+  if (!primary || primary.role !== 'link') return false;
+
+  const title = normalized(action.title);
+  const description = normalized(action.description);
+  const targetName = normalized(primary.name || primary.text);
+  const genericPattern = /^(link|open link|navigation link|go to link|learn more|read more|more|details?|view)$/i;
+  const hasGenericLabel = genericPattern.test(title)
+    || genericPattern.test(description)
+    || genericPattern.test(targetName)
+    || /\.link(?:_\d+)?$/.test(action.action);
+
+  if (!hasGenericLabel) return false;
+
+  const meaningfulCuePattern = /\b(apply|admissions?|curriculum|faculty|tuition|request|download|contact|sign in|log in|get started|start application|register|browse)\b/i;
+  const evidenceText = [
+    action.title,
+    action.description,
+    primary.name,
+    primary.text,
+    ...(action.evidence || []).map((item) => item.value),
+  ].filter(Boolean).join(' ');
+
+  return !meaningfulCuePattern.test(evidenceText);
 }
 
 function resolveTargetIds(action: RawInferredAction, snapshot: DiscoverySnapshot): string[] {
@@ -200,8 +281,8 @@ export function normalizeInferenceResult(
 ): InferredDiscoveryResult {
   const seen = new Set<string>();
   const resolvedActions = new Map<string, ResolvedInferredAction>();
-
-  const actions: DiscoveredAction[] = parsed.actions.map((action) => {
+  const collectionsById = new Map((snapshot.collectionCandidates || []).map((candidate) => [candidate.collectionId, candidate]));
+  const baseActions: DiscoveredAction[] = parsed.actions.flatMap((action) => {
     const normalized = applyInferenceRiskRules({
       ...action,
       intent: normalizeIntent(action.intent),
@@ -210,6 +291,9 @@ export function normalizeInferenceResult(
         intent: normalizeIntent(action.intent),
       }, snapshot),
     }, snapshot);
+    if (isLowValueNavigationAction(normalized, snapshot)) {
+      return [];
+    }
     const actionName = normalizeActionName(normalized, parsed.pageType, seen);
     const targetSelectors = normalized.targetIds
       .map((id) => snapshot.interactives.find((node) => node.elementId === id)?.selector)
@@ -252,7 +336,7 @@ export function normalizeInferenceResult(
         ...(normalized.supported === false && normalized.unsupportedReason ? { unsupportedReason: normalized.unsupportedReason } : {}),
       });
 
-      return {
+      return [{
       action: actionName,
       kind: 'action',
       danger: normalized.risk,
@@ -272,12 +356,27 @@ export function normalizeInferenceResult(
         pageType: parsed.pageType,
       evidence: toEvidence(normalized),
       idempotent: normalized.idempotent ? 'true' : 'false',
-    };
+    }];
   });
+  const collectionActions: DiscoveredAction[] = [];
+
+  const collections: DiscoveredCollection[] = (parsed.collections || [])
+    .map((collection) => normalizeCollection(
+      collection,
+      collectionsById.get(collection.collectionId),
+      parsed.pageType,
+      parsed.siteType,
+      seen,
+      resolvedActions,
+      collectionActions,
+    ))
+    .filter((collection): collection is DiscoveredCollection => Boolean(collection));
+  const actions = [...baseActions, ...collectionActions];
 
   return {
     catalog: {
       actions,
+      ...(collections.length > 0 ? { collections } : {}),
       url: snapshot.url,
       timestamp: new Date().toISOString(),
       discoveryMode: 'inferred',
@@ -290,6 +389,196 @@ export function normalizeInferenceResult(
     },
     resolvedActions,
   };
+}
+
+function normalizeCollection(
+  raw: NonNullable<RawInferenceResult['collections']>[number],
+  candidate: CollectionCandidate | undefined,
+  pageType: string,
+  siteType: string,
+  seen: Set<string>,
+  resolvedActions: Map<string, ResolvedInferredAction>,
+  collectionActions: DiscoveredAction[],
+): DiscoveredCollection | null {
+  if (!candidate || candidate.itemCount < 2) return null;
+
+  const items: DiscoveredCollectionItem[] = candidate.items.map((item) => {
+    const itemName = item.title || item.keyTexts[0] || item.summary;
+    const keyFields: Record<string, string> = {};
+    if (itemName) keyFields.item_name = itemName;
+    const priceText = item.keyTexts.find((text) => /\$\s?\d|\d+\s?(usd|eur|gbp)/i.test(text));
+    if (priceText) keyFields.price = priceText;
+    return {
+      itemId: item.itemId,
+      ...(item.title ? { title: item.title } : {}),
+      summary: item.summary,
+      ...(Object.keys(keyFields).length > 0 ? { keyFields } : {}),
+    };
+  });
+
+  const templates: DiscoveredCollectionActionTemplate[] = [];
+  for (const template of raw.actionTemplates) {
+    const actionName = normalizeCollectionActionName(template.action, raw.title, pageType, seen);
+    const representative = resolveCollectionTemplate(template.targetRole, template.targetName, candidate);
+    const supported = template.supported !== false && Boolean(representative);
+    const unsupportedReason = !representative
+      ? template.unsupportedReason || 'Collection action could not be grounded within repeated items'
+      : template.unsupportedReason;
+    const templateIntent = normalizeIntent(template.intent);
+    const itemField = inferItemReferenceField(raw, candidate);
+    const title = template.title;
+
+    resolvedActions.set(actionName, {
+      action: actionName,
+      title,
+      targetSelectors: representative ? [representative.selector] : [],
+      submitSelector: representative?.selector,
+      fields: [{
+        field: itemField,
+        selector: candidate.selector,
+        controlType: 'text',
+        required: true,
+        label: 'Item reference',
+      }],
+      intent: templateIntent,
+      risk: 'low',
+      supported,
+      ...(unsupportedReason ? { unsupportedReason } : {}),
+      collectionScope: {
+        collectionId: candidate.collectionId,
+        collectionSelector: candidate.selector,
+        itemSelectorById: Object.fromEntries(candidate.items.map((item) => [item.itemId, item.selector])),
+        itemSummaries: candidate.items.map((item) => ({
+          itemId: item.itemId,
+          title: item.title || item.keyTexts[0] || item.summary,
+          summary: item.summary,
+          keyTexts: item.keyTexts,
+          interactiveIds: item.interactiveIds,
+        })),
+        itemRefField: itemField,
+        targetRole: representative?.role || template.targetRole,
+        ...(representative?.name ? { targetName: representative.name } : template.targetName ? { targetName: template.targetName } : {}),
+      },
+    });
+
+    templates.push({
+      action: actionName,
+      title,
+      ...(template.description ? { description: template.description } : {}),
+      intent: templateIntent,
+      ...(representative?.role ? { targetRole: representative.role } : template.targetRole ? { targetRole: template.targetRole } : {}),
+      ...(representative?.name ? { targetName: representative.name } : template.targetName ? { targetName: template.targetName } : {}),
+      ...(template.confidence !== undefined ? { confidence: template.confidence } : {}),
+      supported,
+      ...(unsupportedReason ? { unsupportedReason } : {}),
+    });
+
+    actionsFromTemplate(actionName, title, template, itemField, raw, pageType, siteType, collectionActions, supported, unsupportedReason);
+  }
+
+  return {
+    collectionId: raw.collectionId,
+    title: raw.title,
+    ...(raw.description ? { description: raw.description } : {}),
+    confidence: raw.confidence,
+    itemKeyFields: raw.itemKeyFields.length > 0 ? raw.itemKeyFields : [inferItemReferenceField(raw, candidate)],
+    items,
+    actionTemplates: templates,
+  };
+}
+
+function actionsFromTemplate(
+  actionName: string,
+  title: string,
+  template: NonNullable<NonNullable<RawInferenceResult['collections']>[number]['actionTemplates']>[number],
+  itemField: string,
+  rawCollection: NonNullable<RawInferenceResult['collections']>[number],
+  pageType: string,
+  siteType: string,
+  actionList: DiscoveredAction[],
+  supported: boolean,
+  unsupportedReason?: string,
+): void {
+  actionList.push({
+    action: actionName,
+    kind: 'action',
+    danger: 'low',
+    confirm: 'optional',
+    fields: [{
+      field: itemField,
+      tagName: 'input',
+      required: true,
+      schemaType: 'string',
+      label: 'Item reference',
+      controlType: 'text',
+    }],
+    statuses: [],
+    title,
+    ...(template.description ? { description: template.description } : {}),
+    source: 'inferred',
+    risk: 'low',
+    confirmation: 'optional',
+    intent: normalizeIntent(template.intent),
+    confidence: template.confidence ?? rawCollection.confidence,
+    supported,
+    ...(unsupportedReason ? { unsupportedReason } : template.unsupportedReason ? { unsupportedReason: template.unsupportedReason } : {}),
+    siteType,
+    pageType,
+    evidence: [
+      ...(rawCollection.title ? [{ kind: 'heading' as const, value: rawCollection.title }] : []),
+      ...(template.targetName ? [{ kind: 'name' as const, value: template.targetName }] : []),
+    ],
+    idempotent: 'false',
+  });
+}
+
+function inferItemReferenceField(
+  raw: NonNullable<RawInferenceResult['collections']>[number],
+  candidate: CollectionCandidate,
+): string {
+  const explicit = raw.itemKeyFields.find((field) => field && field !== 'price');
+  if (explicit) return explicit;
+  const firstItem = candidate.items[0];
+  if (firstItem?.title) return 'item_name';
+  return 'item_ref';
+}
+
+function normalizeCollectionActionName(rawAction: string, title: string, pageType: string, seen: Set<string>): string {
+  const synthetic: RawInferredAction = {
+    action: rawAction,
+    title,
+    kind: 'action',
+    intent: 'unknown',
+    targetIds: [],
+    fields: [],
+    risk: 'low',
+    confirmation: 'optional',
+    idempotent: false,
+    confidence: 0.8,
+    expectedEffect: 'mutate',
+    supported: true,
+    evidence: [],
+  };
+  return normalizeActionName(synthetic, pageType, seen);
+}
+
+function resolveCollectionTemplate(
+  targetRole: string | undefined,
+  targetName: string | undefined,
+  candidate: CollectionCandidate,
+): { selector: string; role?: string; name?: string } | undefined {
+  const roleNeedle = normalized(targetRole);
+  const nameNeedle = normalized(targetName);
+  for (const item of candidate.items) {
+    for (const node of item.interactives) {
+      const roleMatch = !roleNeedle || normalized(node.role) === roleNeedle;
+      const nameMatch = !nameNeedle || normalized(node.name || node.text).includes(nameNeedle);
+      if (roleMatch && nameMatch) {
+        return { selector: node.selector, role: node.role, name: node.name || node.text };
+      }
+    }
+  }
+  return undefined;
 }
 
 export class InferredActionDiscoverer {

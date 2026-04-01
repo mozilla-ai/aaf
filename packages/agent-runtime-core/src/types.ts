@@ -118,6 +118,36 @@ export interface DiscoveredLink {
   textContent?: string;
 }
 
+export interface DiscoveredCollectionItem {
+  itemId: string;
+  title?: string;
+  summary: string;
+  keyFields?: Record<string, string>;
+  actionIds?: string[];
+}
+
+export interface DiscoveredCollectionActionTemplate {
+  action: string;
+  title: string;
+  description?: string;
+  intent?: DiscoveredAction['intent'];
+  targetRole?: string;
+  targetName?: string;
+  confidence?: number;
+  supported?: boolean;
+  unsupportedReason?: string;
+}
+
+export interface DiscoveredCollection {
+  collectionId: string;
+  title: string;
+  description?: string;
+  confidence: number;
+  itemKeyFields: string[];
+  items: DiscoveredCollectionItem[];
+  actionTemplates: DiscoveredCollectionActionTemplate[];
+}
+
 export type LogStepType = 'navigate' | 'fill' | 'click' | 'read_status' | 'validate' | 'policy_check' | 'coerce';
 
 export interface LogStep {
@@ -149,6 +179,7 @@ export interface PolicyCheckResult {
 
 export interface ActionCatalog {
   actions: DiscoveredAction[];
+  collections?: DiscoveredCollection[];
   url: string;
   timestamp: string;
   discoveryMode?: 'aaf' | 'inferred';

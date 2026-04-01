@@ -27,6 +27,10 @@ const DOM_SNAPSHOT_SCRIPT = String.raw`
     return text ? text.slice(0, 120) : undefined;
   }
 
+  function normalizedText(value) {
+    return (value || '').replace(/\s+/g, ' ').trim();
+  }
+
   function isVisible(el) {
     const style = window.getComputedStyle(el);
     const rect = el.getBoundingClientRect();
@@ -78,6 +82,23 @@ const DOM_SNAPSHOT_SCRIPT = String.raw`
     if (wrapText)
       return wrapText;
     return undefined;
+  }
+
+  function itemTitle(el) {
+    const preferred = el.querySelector('h1, h2, h3, h4, h5, h6, [data-title], strong, b');
+    const preferredText = textOf(preferred);
+    if (preferredText)
+      return preferredText;
+    return textOf(el);
+  }
+
+  function structureSignature(el) {
+    const directChildren = Array.from(el.children).slice(0, 8).map((child) => child.tagName.toLowerCase()).join(',');
+    const roles = Array.from(el.querySelectorAll(interactiveSelector))
+      .slice(0, 8)
+      .map((node) => (node.getAttribute('role') || node.tagName.toLowerCase() || '').toLowerCase())
+      .join(',');
+    return [el.tagName.toLowerCase(), directChildren, roles].filter(Boolean).join('|');
   }
 
   const interactiveSelector = [
@@ -172,6 +193,112 @@ const DOM_SNAPSHOT_SCRIPT = String.raw`
     .join(' ')
     .slice(0, 3000);
 
+  const collectionCandidates = Array.from(document.querySelectorAll('body *'))
+    .map((container) => {
+      const children = Array.from(container.children)
+        .filter((child) => isVisible(child));
+      if (children.length < 3)
+        return null;
+
+      const groups = new Map();
+      for (const child of children) {
+        const descendantInteractives = Array.from(child.querySelectorAll(interactiveSelector))
+          .filter((node) => isVisible(node));
+        const signature = [
+          child.tagName.toLowerCase(),
+          descendantInteractives.length,
+          descendantInteractives
+            .slice(0, 6)
+            .map((node) => (node.getAttribute('role') || node.tagName.toLowerCase()).toLowerCase())
+            .join(','),
+        ].join('|');
+        if (!groups.has(signature))
+          groups.set(signature, []);
+        groups.get(signature).push(child);
+      }
+
+      let bestGroup = null;
+      for (const group of groups.values()) {
+        if (group.length < 3)
+          continue;
+        if (!bestGroup || group.length > bestGroup.length)
+          bestGroup = group;
+      }
+      if (!bestGroup)
+        return null;
+
+      const items = bestGroup.map((child) => {
+        const itemId = ensureId(child);
+        const localInteractives = Array.from(child.querySelectorAll(interactiveSelector))
+          .filter((node) => isVisible(node))
+          .map((node) => {
+            const tag = node.tagName.toLowerCase();
+            const text = textOf(node);
+            const name = labelFor(node) || node.getAttribute('aria-label') || ((tag === 'button' || tag === 'a') ? text : undefined) || node.getAttribute('placeholder') || undefined;
+            const role = node.getAttribute('role')
+              || (tag === 'a' ? 'link' : tag === 'button' ? 'button' : tag === 'select' ? 'combobox' : tag === 'textarea' ? 'textbox' : tag === 'input' ? (node.type || 'textbox') : tag);
+            const elementId = ensureId(node);
+            return {
+              elementId,
+              role,
+              ...(name ? { name } : {}),
+              ...(text ? { text } : {}),
+              selector: '[' + ATTR + '="' + elementId + '"]',
+            };
+          });
+        const interactiveIds = localInteractives.map((node) => node.elementId);
+        const textSummary = normalizedText(child.textContent || '').slice(0, 240);
+        const keyTexts = Array.from(child.querySelectorAll('h1, h2, h3, h4, h5, h6, strong, b, [aria-label], img[alt]'))
+          .map((node) => {
+            const aria = node.getAttribute ? node.getAttribute('aria-label') : '';
+            const alt = node.getAttribute ? node.getAttribute('alt') : '';
+            return normalizedText(aria || node.textContent || alt || '');
+          })
+          .filter(Boolean)
+          .slice(0, 6);
+        return {
+          itemId,
+          selector: '[' + ATTR + '="' + itemId + '"]',
+          ...(itemTitle(child) ? { title: itemTitle(child) } : {}),
+          summary: textSummary || itemTitle(child) || child.tagName.toLowerCase(),
+          keyTexts: keyTexts.length > 0 ? keyTexts : [textSummary || itemTitle(child) || child.tagName.toLowerCase()],
+          interactiveIds,
+          interactives: localInteractives,
+        };
+      }).filter((item) => item.interactiveIds.length > 0 || item.summary);
+
+      if (items.length < 3)
+        return null;
+
+      const label = textOf(container.querySelector('h1, h2, h3, h4, h5, h6')) || container.getAttribute('aria-label') || undefined;
+      const signature = structureSignature(bestGroup[0]);
+      const collectionId = ensureId(container);
+
+      const uniqueInteractiveLabels = new Set(
+        items.flatMap((item) => item.interactives.map((node) => normalizedText(node.name || node.text || '')).filter(Boolean)),
+      );
+
+      if (uniqueInteractiveLabels.size === 0)
+        return null;
+
+      return {
+        collectionId,
+        containerId: collectionId,
+        selector: '[' + ATTR + '="' + collectionId + '"]',
+        ...(label ? { label } : {}),
+        itemIds: items.map((item) => item.itemId),
+        itemCount: items.length,
+        structureSignature: signature,
+        items,
+      };
+    })
+    .filter((candidate, index, arr) => {
+      if (!candidate)
+        return false;
+      return arr.findIndex((other) => other && other.collectionId === candidate.collectionId) === index;
+    })
+    .slice(0, 12);
+
   return {
     url: window.location.href,
     title: document.title,
@@ -179,6 +306,7 @@ const DOM_SNAPSHOT_SCRIPT = String.raw`
     landmarks,
     forms,
     interactives,
+    collectionCandidates,
     pageTextSummary,
   };
 }

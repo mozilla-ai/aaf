@@ -103,4 +103,59 @@ describe('InferredActionExecutor partial execution', () => {
     expect(result.execution_details).toContain('filled email -> Email with "alice@example.com"');
     expect(result.execution_details).toContain('submit target unresolved; filled fields for manual review');
   });
+
+  it('resolves collection item references before clicking an item-scoped target', async () => {
+    const click = vi.fn(async () => undefined);
+    const count = vi.fn(async () => 1);
+    const evaluate = vi.fn(async () => 'button "Add to cart"');
+    const pageEvaluate = vi.fn(async () => '[data-aaf-inferred-id="cart_2"]');
+
+    const locator = {
+      first: () => locator,
+      count,
+      evaluate,
+      click,
+    };
+
+    const page = {
+      locator: vi.fn(() => locator),
+      evaluate: pageEvaluate,
+      url: vi.fn(() => 'https://example.com/products'),
+      waitForLoadState: vi.fn(async () => undefined),
+      waitForURL: vi.fn(async () => undefined),
+      waitForTimeout: vi.fn(async () => undefined),
+    };
+
+    const executor = new InferredActionExecutor();
+    const action: ResolvedInferredAction = {
+      action: 'cart.add_item',
+      fields: [{ field: 'item_name', selector: '#products', controlType: 'text', required: true }],
+      supported: true,
+      intent: 'create',
+      risk: 'low',
+      targetSelectors: ['[data-aaf-inferred-id="cart_1"]'],
+      collectionScope: {
+        collectionId: 'col_1',
+        collectionSelector: '#products',
+        itemSelectorById: {
+          item_1: '[data-aaf-inferred-id="item_1"]',
+          item_2: '[data-aaf-inferred-id="item_2"]',
+        },
+        itemSummaries: [
+          { itemId: 'item_1', title: 'Widget Alpha', summary: 'Widget Alpha Add to cart', keyTexts: ['Widget Alpha'], interactiveIds: ['cart_1'] },
+          { itemId: 'item_2', title: 'Widget Beta', summary: 'Widget Beta Add to cart', keyTexts: ['Widget Beta'], interactiveIds: ['cart_2'] },
+        ],
+        itemRefField: 'item_name',
+        targetRole: 'button',
+        targetName: 'Add to cart',
+      },
+    };
+
+    const result = await executor.execute(page as never, action, { item_name: 'Widget Beta' });
+
+    expect(pageEvaluate).toHaveBeenCalled();
+    expect(click).toHaveBeenCalled();
+    expect(result.status).toBe('completed');
+    expect(result.execution_details).toContain('resolved item_name -> "Widget Beta"');
+  });
 });

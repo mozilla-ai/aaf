@@ -33,6 +33,33 @@ export interface FormSummary {
   submitIds: string[];
 }
 
+export interface CollectionCandidateItem {
+  itemId: string;
+  selector: string;
+  title?: string;
+  summary: string;
+  keyTexts: string[];
+  interactiveIds: string[];
+  interactives: Array<{
+    elementId: string;
+    role: string;
+    name?: string;
+    text?: string;
+    selector: string;
+  }>;
+}
+
+export interface CollectionCandidate {
+  collectionId: string;
+  containerId: string;
+  selector: string;
+  label?: string;
+  itemIds: string[];
+  itemCount: number;
+  structureSignature: string;
+  items: CollectionCandidateItem[];
+}
+
 export interface DiscoverySnapshot {
   url: string;
   title: string;
@@ -40,6 +67,7 @@ export interface DiscoverySnapshot {
   landmarks: Array<{ role: string; name?: string }>;
   forms: FormSummary[];
   interactives: InteractiveNode[];
+  collectionCandidates?: CollectionCandidate[];
   pageTextSummary: string;
   a11ySummary: AccessibilityNodeSummary[];
 }
@@ -76,6 +104,28 @@ export interface RawInferenceResult {
   summary: string;
   confidence: number;
   actions: RawInferredAction[];
+  collections?: RawInferredCollection[];
+}
+
+export interface RawInferredCollectionActionTemplate {
+  action: string;
+  title: string;
+  description?: string;
+  intent?: DiscoveredAction['intent'];
+  targetRole?: string;
+  targetName?: string;
+  confidence?: number;
+  supported?: boolean;
+  unsupportedReason?: string;
+}
+
+export interface RawInferredCollection {
+  collectionId: string;
+  title: string;
+  description?: string;
+  itemKeyFields: string[];
+  confidence: number;
+  actionTemplates: RawInferredCollectionActionTemplate[];
 }
 
 export function buildInferenceSystemPrompt(snapshot: DiscoverySnapshot): string {
@@ -85,9 +135,12 @@ Return EXACTLY one JSON object. Do not include markdown. Do not invent controls 
 Goals:
 1. Classify the site and page.
 2. Infer likely user-meaningful actions on this page.
+3. Detect repeated collections and infer shared item-level action templates once per collection.
 3. Use contextual semantic action IDs with dot notation.
 4. Include only actions grounded in the supplied interactives and forms.
 5. Prefer one semantic action per form or region, not one action per field.
+6. For repeated product/list/card/table structures, prefer collection-level templates instead of duplicating one action per repeated item.
+7. Include plausible low-confidence actions when they are grounded in visible controls, but mark them with lower confidence and supported=false instead of omitting them.
 
 Output JSON shape:
 {
@@ -123,17 +176,44 @@ Output JSON shape:
       "unsupportedReason": "only include when supported is false",
       "evidence": [{"kind":"role","value":"button"}]
     }
+  ],
+  "collections": [
+    {
+      "collectionId": "col_1",
+      "title": "Product listing",
+      "description": "optional",
+      "itemKeyFields": ["product_name", "price"],
+      "confidence": 0.88,
+      "actionTemplates": [
+        {
+          "action": "cart.add_item",
+          "title": "Add item to cart",
+          "description": "optional",
+          "intent": "create",
+          "targetRole": "button",
+          "targetName": "Add to cart",
+          "confidence": 0.9,
+          "supported": true,
+          "unsupportedReason": "only include when supported is false"
+        }
+      ]
+    }
   ]
 }
 
 Rules:
 - Use ONLY supplied element IDs from interactives/forms.
-- Omit uncertain actions instead of guessing.
+- Do not invent actions, but do include plausible low-confidence actions when grounded in visible controls.
+- For low-confidence or weakly grounded actions, set supported to false and provide unsupportedReason instead of omitting them.
 - Use dot-separated semantic action names.
 - Do not reference selectors, XPath, CSS, or DOM paths.
 - Use contextual names based on page type and intent.
 - Mark destructive, payment, or irreversible actions as unsupported.
 - Use only these evidence kinds when possible: role, name, label, heading, landmark, url, text.
+- Do not emit generic brochure-site navigation links like "link" or "learn more" unless they are clearly primary CTAs or workflow entry points.
+- Only emit collections for repeated structures present in collectionCandidates.
+- Prefer collection templates for repeated item-local actions instead of one duplicated action per item.
+- Collection action templates must describe an action that is available on most or all items in the collection.
 
 Snapshot:
 ${JSON.stringify(snapshot, null, 2)}`;
