@@ -4,12 +4,16 @@ import { buildSystemPrompt, buildUserPrompt, parseResponse, type LlmBackend } fr
 import { getPageForAction } from '@agent-accessibility-framework/runtime-core';
 import type { AgentManifest, ActionCatalog } from '@agent-accessibility-framework/runtime-core';
 import { PlaywrightAdapter } from '@agent-accessibility-framework/runtime-playwright';
+import { extractDomSnapshot } from '../../agent-runtime-playwright/src/dom-affordance-extractor.js';
+import { extractAccessibilitySummary } from '../../agent-runtime-playwright/src/accessibility-extractor.js';
+import { buildInferenceSystemPrompt } from '../../agent-runtime-playwright/src/inference-prompt.js';
 import * as readline from 'readline';
 import { createBackendCandidate } from './llm-config.js';
 
 const LEGACY_OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const LEGACY_OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.2';
 const HEADLESS = process.env.AAF_HEADLESS !== 'false';
+const DEBUG_COLLECTIONS = process.env.AAF_DEBUG_COLLECTIONS === 'true';
 
 function log(label: string, msg: string) {
   console.log(`\x1b[36m[${label}]\x1b[0m ${msg}`);
@@ -90,6 +94,79 @@ function printCatalog(catalog: ActionCatalog) {
       dim(`  field: ${field.field} <${field.controlType || field.tagName}>`);
     }
   }
+  console.log();
+}
+
+async function printCollectionCandidates(page: Page, maxInteractiveNodes = 150) {
+  const snapshot = await extractDomSnapshot(page, maxInteractiveNodes);
+  const candidates = snapshot.collectionCandidates || [];
+  console.log();
+  log('collections', `Found ${candidates.length} collection candidate(s) on ${snapshot.url}`);
+  for (const candidate of candidates) {
+    const label = candidate.label ? ` "${candidate.label}"` : '';
+    console.log(`  \x1b[35m${candidate.collectionId}\x1b[0m${label} \x1b[90m(items:${candidate.itemCount}, signature:${candidate.structureSignature})\x1b[0m`);
+    for (const item of candidate.items.slice(0, 5)) {
+      dim(`  item: ${item.title || item.summary}`);
+      const controls = item.interactives.map((interactive) => `${interactive.role}:${interactive.name || interactive.text || interactive.elementId}`);
+      if (controls.length > 0) dim(`  controls: ${controls.join(' | ')}`);
+    }
+    if (candidate.items.length > 5) {
+      dim(`  ... ${candidate.items.length - 5} more item(s)`);
+    }
+  }
+  console.log();
+}
+
+async function printSnapshot(page: Page, maxInteractiveNodes = 150) {
+  const snapshot = await extractDomSnapshot(page, maxInteractiveNodes);
+  console.log();
+  log('snapshot', `${snapshot.url}`);
+  dim(`title: ${snapshot.title}`);
+  dim(`headings: ${snapshot.headings.length}`);
+  for (const heading of snapshot.headings.slice(0, 8)) {
+    dim(`  h${heading.level}: ${heading.text}`);
+  }
+  if (snapshot.headings.length > 8) dim(`  ... ${snapshot.headings.length - 8} more heading(s)`);
+
+  dim(`landmarks: ${snapshot.landmarks.length}`);
+  for (const landmark of snapshot.landmarks.slice(0, 8)) {
+    dim(`  ${landmark.role}${landmark.name ? `: ${landmark.name}` : ''}`);
+  }
+  if (snapshot.landmarks.length > 8) dim(`  ... ${snapshot.landmarks.length - 8} more landmark(s)`);
+
+  dim(`forms: ${snapshot.forms.length}`);
+  for (const form of snapshot.forms) {
+    dim(`  ${form.formId}${form.name ? `: ${form.name}` : ''} fields:${form.fieldIds.length} submits:${form.submitIds.length}`);
+  }
+
+  dim(`interactives: ${snapshot.interactives.length}`);
+  for (const interactive of snapshot.interactives.slice(0, 30)) {
+    dim(`  ${interactive.elementId} ${interactive.role}${interactive.name ? ` "${interactive.name}"` : interactive.text ? ` "${interactive.text}"` : ''}`);
+  }
+  if (snapshot.interactives.length > 30) dim(`  ... ${snapshot.interactives.length - 30} more interactive(s)`);
+
+  const candidates = snapshot.collectionCandidates || [];
+  dim(`collectionCandidates: ${candidates.length}`);
+  for (const candidate of candidates) {
+    dim(`  ${candidate.collectionId}${candidate.label ? ` "${candidate.label}"` : ''} items:${candidate.itemCount} signature:${candidate.structureSignature}`);
+  }
+
+  dim(`pageTextSummary: ${snapshot.pageTextSummary}`);
+  console.log();
+}
+
+async function printInferencePrompt(page: Page, maxInteractiveNodes = 150) {
+  const [domSnapshot, a11ySummary] = await Promise.all([
+    extractDomSnapshot(page, maxInteractiveNodes),
+    extractAccessibilitySummary(page),
+  ]);
+  const prompt = buildInferenceSystemPrompt({
+    ...domSnapshot,
+    a11ySummary,
+  });
+  console.log();
+  log('prompt', 'Inference system prompt');
+  console.log(prompt);
   console.log();
 }
 
@@ -238,6 +315,9 @@ async function main() {
       error('No actions were discovered on this page.');
       process.exit(1);
     }
+    if (DEBUG_COLLECTIONS) {
+      await printCollectionCandidates(page);
+    }
     printCatalog(catalog);
 
     if (command) {
@@ -259,7 +339,25 @@ async function main() {
         }
         if (trimmed === 'scan' || trimmed === 'discover') {
           catalog = await adapter.discover();
+          if (DEBUG_COLLECTIONS) {
+            await printCollectionCandidates(page);
+          }
           printCatalog(catalog);
+          promptUser();
+          return;
+        }
+        if (trimmed === 'debug collections') {
+          await printCollectionCandidates(page);
+          promptUser();
+          return;
+        }
+        if (trimmed === 'debug snapshot') {
+          await printSnapshot(page);
+          promptUser();
+          return;
+        }
+        if (trimmed === 'debug prompt') {
+          await printInferencePrompt(page);
           promptUser();
           return;
         }
@@ -269,6 +367,9 @@ async function main() {
           log('navigate', fullUrl);
           await navigateTo(page, fullUrl);
           catalog = await adapter.discover();
+          if (DEBUG_COLLECTIONS) {
+            await printCollectionCandidates(page);
+          }
           printCatalog(catalog);
           promptUser();
           return;
@@ -278,6 +379,9 @@ async function main() {
   \x1b[1mCommands:\x1b[0m
     <natural language>  Ask the LLM to execute an action
     scan                Re-discover actions on current page
+    debug collections   Print inferred collection candidates on current page
+    debug snapshot      Print the full inferred DOM snapshot on current page
+    debug prompt        Print the exact inference prompt sent to the LLM
     goto <path>         Navigate to a different page
     help                Show this help
     exit                Quit

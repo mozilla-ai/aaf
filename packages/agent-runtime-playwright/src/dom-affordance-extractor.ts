@@ -92,6 +92,52 @@ const DOM_SNAPSHOT_SCRIPT = String.raw`
     return textOf(el);
   }
 
+  function collectionLabel(container, items) {
+    const aria = container.getAttribute('aria-label');
+    if (aria && normalizedText(aria))
+      return normalizedText(aria);
+
+    const itemSet = new Set(items);
+    const directChildren = Array.from(container.children);
+    for (const child of directChildren) {
+      if (itemSet.has(child))
+        continue;
+      const heading = child.matches('h1, h2, h3, h4, h5, h6')
+        ? child
+        : child.querySelector('h1, h2, h3, h4, h5, h6');
+      const text = textOf(heading);
+      if (text)
+        return text;
+    }
+
+    let sibling = container.previousElementSibling;
+    while (sibling) {
+      const heading = sibling.matches('h1, h2, h3, h4, h5, h6')
+        ? sibling
+        : sibling.querySelector('h1, h2, h3, h4, h5, h6');
+      const text = textOf(heading);
+      if (text)
+        return text;
+      sibling = sibling.previousElementSibling;
+    }
+
+    const section = container.closest('section, main, article');
+    if (section && section !== container) {
+      for (const child of Array.from(section.children)) {
+        if (child === container)
+          break;
+        const heading = child.matches('h1, h2, h3, h4, h5, h6')
+          ? child
+          : child.querySelector('h1, h2, h3, h4, h5, h6');
+        const text = textOf(heading);
+        if (text)
+          return text;
+      }
+    }
+
+    return undefined;
+  }
+
   function structureSignature(el) {
     const directChildren = Array.from(el.children).slice(0, 8).map((child) => child.tagName.toLowerCase()).join(',');
     const roles = Array.from(el.querySelectorAll(interactiveSelector))
@@ -270,7 +316,7 @@ const DOM_SNAPSHOT_SCRIPT = String.raw`
       if (items.length < 3)
         return null;
 
-      const label = textOf(container.querySelector('h1, h2, h3, h4, h5, h6')) || container.getAttribute('aria-label') || undefined;
+      const label = collectionLabel(container, bestGroup);
       const signature = structureSignature(bestGroup[0]);
       const collectionId = ensureId(container);
 
