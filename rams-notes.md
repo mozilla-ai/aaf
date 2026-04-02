@@ -255,6 +255,71 @@ What this suggests:
 - on Amazon search results, the system found a plausible filter action but did not yet know how to operate the wrapped dropdown safely
 - large sites with layered custom controls may need control-specific execution strategies, not just better page understanding
 
+### Real-Site GPT-5.4 Case
+
+Amazon was later rerun again using:
+
+- `gpt-5.4`
+
+Observed result:
+
+- homepage understanding improved significantly
+- the inferred action catalog on the homepage became much richer
+- the runtime inferred search, account, cart, category, and other page-level actions
+- the homepage search flow worked end to end
+- the runtime successfully navigated to Amazon search results for `manchego cheese`
+
+On the search-results page, the inference quality also improved:
+
+- the page was classified as e-commerce marketplace / search results
+- the runtime inferred result-level actions like:
+  - `product.open`
+  - `reviews.open`
+  - `cart.add_item`
+- these appeared as item-scoped actions with `product_name` fields
+
+However, those repeated-item actions were still not executable.
+
+Observed result on search results:
+
+- repeated-item collection-style actions were inferred
+- but several were marked unsupported with:
+  - `Collection action could not be grounded within repeated items`
+
+Observed CLI output excerpt:
+
+```text
+[discover] Found 11 action(s) on https://www.amazon.com/s?k=manchego+cheese&ref=nb_sb_noss [inferred]
+  context: ecommerce marketplace / search results (0.96)
+  summary: Amazon search results page for "manchego cheese" with a global search form, sort control, product results, and repeated item-level actions like opening product details, viewing reviews, seeing purchase options, and adding some items to cart.
+  search.submit (source:inferred, supported:yes, risk:low, confirm:optional, confidence:0.98)
+    field: department <select>
+    field: query <search>
+  results.sort (source:inferred, supported:yes, risk:low, confirm:optional, confidence:0.95)
+    field: sort_by <select>
+  product.open (source:inferred, supported:no, risk:low, confirm:optional, confidence:0.98)
+    unsupported: Collection action could not be grounded within repeated items
+    field: product_name <text>
+  reviews.open (source:inferred, supported:no, risk:low, confirm:optional, confidence:0.90)
+    unsupported: Collection action could not be grounded within repeated items
+    field: product_name <text>
+  cart.add_item (source:inferred, supported:no, risk:low, confirm:optional, confidence:0.88)
+    unsupported: Collection action could not be grounded within repeated items
+    field: product_name <text>
+```
+
+What this suggests:
+
+- `gpt-5.4` is much better than `gpt-4o-mini` at seeing collection-like repeated-item actions on real sites
+- the collection inference path is not limited to synthetic fixtures anymore
+- the remaining bottleneck is no longer high-level collection recognition
+- the current bottleneck is robust grounding within heterogeneous real-world item cards
+
+In other words:
+
+- repeated-item understanding improved
+- repeated-item execution grounding is still weak on messy production pages like Amazon search results
+
 ### Error Reporting Status
 
 Error reporting for inferred-action failures is now clearer than it was earlier in the run.
@@ -335,6 +400,115 @@ This fixed the product-list fixture so the collection is now labeled:
 - `Search results`
 
 instead of the first product name.
+
+## Collections
+
+To test repeated-item inference in a controlled way, a new local unannotated product-list fixture was created:
+
+- `tests/falsification/fixtures/unannotated-product-list/index.html`
+
+This page was designed specifically to exercise collection-style inference on a non-AAF page. It includes:
+
+- a search form
+- a filter form
+- a repeated product-card grid
+- per-item `Add to cart` and `Save for later` controls
+- item identity cues such as product name and price
+
+This let us test the repeated-item path locally instead of relying on noisy real ecommerce pages.
+
+### What Was Observed
+
+Using `debug collections`, the runtime found a repeated-item collection candidate with:
+
+- 4 product items
+- a stable repeated structure signature
+- item-local controls captured correctly for each card
+
+After the collection naming fix, the candidate is labeled:
+
+- `Search results`
+
+instead of incorrectly using the first item title.
+
+### Model Change
+
+The biggest change in behavior came from switching from `gpt-4o-mini` to:
+
+- `gpt-5.4`
+
+and using native browser use in that flow.
+
+With the stronger model, the inferred action set on the unannotated product-list page improved substantially. It inferred:
+
+- `search.submit`
+- `filters.apply`
+- `cart.add_item`
+- `wishlist.save_item`
+
+This is important because it means the model was able to:
+
+- recognize the repeated-item collection
+- promote it into shared item-level action templates
+- expose those templates as parameterized actions using `product_name`
+
+### End-to-End Result
+
+The following command was tested successfully:
+
+- `Add young manchego to cart`
+
+Observed result:
+
+- the planner mapped the command to `cart.add_item`
+- the runtime resolved `product_name` to `Young Manchego`
+- the click was scoped to the correct item-local `Add to cart` button
+- execution completed successfully
+
+Observed CLI output:
+
+```text
+[discover] Found 4 action(s) on http://localhost:8082/tests/falsification/fixtures/unannotated-product-list/index.html [inferred]
+  context: ecommerce / product_listing (0.95)
+  summary: Cheese Shop product listing page with catalog search, filter controls, and a repeated search-results collection of cheese products offering item-level add-to-cart and save-for-later actions.
+  search.submit (source:inferred, supported:yes, risk:low, confirm:optional, confidence:0.97)
+    field: query <search>
+  filters.apply (source:inferred, supported:yes, risk:low, confirm:optional, confidence:0.96)
+    field: origin <select>
+    field: in_stock_only <checkbox>
+  cart.add_item (source:inferred, supported:yes, risk:low, confirm:optional, confidence:0.95)
+    field: product_name <text>
+  wishlist.save_item (source:inferred, supported:yes, risk:low, confirm:optional, confidence:0.86)
+    field: product_name <text>
+
+aaf> Add young manchego to cart
+[plan] Asking gpt-5.4 to map: "Add young manchego to cart"
+✓ Planned: cart.add_item
+  args: {"product_name":"young manchego"}
+
+[act] resolved product_name -> "Young Manchego"
+[act] clicked target -> button "Add to cart"
+
+✓ Status: completed
+✓ Result: submitted inferred action "cart.add_item"
+```
+
+### Current Interpretation
+
+This is the strongest local validation so far for inferred collections on unannotated repeated-item pages.
+
+It suggests that:
+
+- collection candidate extraction is working
+- item-local control capture is working
+- collection-aware normalization is working
+- item-scoped execution is working
+- model quality matters a lot for whether repeated-item candidates are promoted into useful collection actions
+
+At this point, the remaining concern is less about whether the runtime can support collections at all, and more about:
+
+- how reliably different models will infer them
+- how deterministic the inferred action names are across rediscovery
 
 ## CLI Debugging Status
 

@@ -38,6 +38,7 @@ function normalizeIntent(intent: string | undefined): NonNullable<DiscoveredActi
     case 'authenticate':
     case 'auth':
       return 'authenticate';
+    case 'navigate':
     case 'navigation':
       return 'navigate';
     case 'search':

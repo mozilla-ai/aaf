@@ -128,13 +128,12 @@ export class InferredActionExecutor {
         ({ itemSelector, role, name }) => {
           const root = document.querySelector(itemSelector);
           if (!root) return null;
-          const normalized = (value: string | null | undefined) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
           const candidates = Array.from(root.querySelectorAll('button, a[href], [role="button"], [role="link"]'));
-          const roleNeedle = normalized(role);
-          const nameNeedle = normalized(name);
+          const roleNeedle = (role || '').replace(/\s+/g, ' ').trim().toLowerCase();
+          const nameNeedle = (name || '').replace(/\s+/g, ' ').trim().toLowerCase();
           for (const el of candidates) {
-            const elementRole = normalized(el.getAttribute('role') || el.tagName.toLowerCase());
-            const elementName = normalized(el.getAttribute('aria-label') || el.textContent || '');
+            const elementRole = (el.getAttribute('role') || el.tagName.toLowerCase()).replace(/\s+/g, ' ').trim().toLowerCase();
+            const elementName = (el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
             const roleMatch = !roleNeedle || elementRole === roleNeedle || (roleNeedle === 'button' && elementRole === 'a');
             const nameMatch = !nameNeedle || elementName.includes(nameNeedle);
             if (roleMatch && nameMatch) {
