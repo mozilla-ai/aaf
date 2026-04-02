@@ -13,6 +13,10 @@ Current behavior:
 - low-risk inferred actions can now partially execute even when the submit/click target is not grounded confidently
 - low-risk inferred search actions now have an Enter-key fallback after field fill
 - inferred-mode action catalogs are now refreshed after page-changing operations instead of being treated as site-wide
+- inferred-mode can now detect repeated-pattern collection candidates during snapshot creation
+- inferred collections can now be normalized into parameterized item-scoped inferred actions
+- inferred item-scoped actions now resolve the requested item before clicking the item-local target
+- the CLI now has snapshot / collection / prompt debugging commands for inferred-mode inspection
 
 ## What Was Added
 
@@ -23,6 +27,11 @@ The project now supports:
 - safe execution of common inferred actions
 - visible-browser manual testing through the CLI
 - OpenAI-compatible and Ollama-backed inference for the CLI path
+- repeated-item collection candidate detection in inferred snapshots
+- collection-aware inferred action templates for repeated item controls
+- item-scoped inferred execution for repeated-item pages
+- local debugging of raw inferred snapshots, collection candidates, and the exact inference prompt
+- a dedicated unannotated repeated-item fixture for local testing
 
 ## What Was Validated
 
@@ -34,12 +43,58 @@ The unannotated fixture pages were exercised successfully:
 - search page
 - settings/toggle page
 - destructive page
+- repeated-item product-list page
 
 The login flow was verified visually by updating the page so that successful submit renders:
 
 - `hello <email>`
 
 This confirmed that inference, planning, filling, and submit propagation all worked end to end.
+
+### Repeated-Item Fixture Validation
+
+A new local unannotated repeated-item fixture was added at:
+
+- `tests/falsification/fixtures/unannotated-product-list/index.html`
+
+What this page includes:
+
+- a product grid with repeated cards
+- per-item `Add to cart` and `Save for later` buttons
+- a search form
+- a filter form
+
+This is meant to test inferred collection detection without relying on noisy real sites like Amazon.
+
+Observed local snapshot/debug result:
+
+- the page is classified as e-commerce / product listing
+- repeated product cards are detected as a single collection candidate
+- item-local controls are captured for each card
+- the collection label now resolves correctly as `Search results` rather than incorrectly using the first product title
+
+Observed collection debug output:
+
+```text
+[collections] Found 1 collection candidate(s) on http://localhost:8082/tests/falsification/fixtures/unannotated-product-list/index.html
+  el_24 "Search results" (items:4, signature:article|h2,p,p,div|button,button)
+    item: Manchego Curado
+    controls: button:Add to cart | button:Save for later
+    item: Manchego Reserva
+    controls: button:Add to cart | button:Save for later
+    item: Young Manchego
+    controls: button:Add to cart | button:Save for later
+    item: Smoked Idiazabal
+    controls: button:Add to cart | button:Save for later
+```
+
+This is an important narrowing of the problem:
+
+- collection detection is working on the synthetic repeated-item page
+- the failure mode is no longer "the runtime cannot see the collection"
+- the remaining bottleneck is that the LLM still sometimes chooses not to emit a collection action template like `cart.add_item`
+
+So at this point the open issue is mostly prompt/model behavior, not repeated-item snapshot extraction.
 
 ### Real-Site Validation
 
@@ -230,6 +285,80 @@ So at this point the error logging is good enough to distinguish:
 - target-grounding problems
 - safety blocks
 - input validation problems
+
+## Collection Inference Status
+
+The inferred-mode pipeline now has an explicit repeated-item collection path.
+
+Current structure:
+
+1. snapshot creation can emit `collectionCandidates`
+2. each candidate contains repeated items plus item-local controls
+3. the inference prompt includes those candidates in the JSON sent to the LLM
+4. if the LLM returns a matching inferred collection, the runtime can normalize it into:
+   - a discovered collection
+   - one or more parameterized item-scoped inferred actions
+5. execution can then resolve an item reference like `item_name` before clicking the matching local control
+
+Important implementation detail:
+
+- collection candidates are detector output, not final semantic collections
+- they only become true inferred collections if the LLM returns a matching `collectionId`
+
+This matters because we now have clear evidence that:
+
+- the detector can find repeated-item groups correctly
+- the prompt/model is still the weaker link for promoting those groups into collection action templates
+
+## Collection Naming Fix
+
+There was a bug where collection candidates were being labeled with the first repeated item's heading.
+
+Example bad behavior:
+
+- the repeated product grid was named `Manchego Curado`
+
+Cause:
+
+- the collection label heuristic was naively pulling the first descendant heading inside the container
+
+Current behavior:
+
+- collection labels now prefer:
+  - `aria-label` on the container
+  - headings in non-item direct children of the container
+  - preceding sibling headings
+  - enclosing section/main/article headings before the collection
+
+This fixed the product-list fixture so the collection is now labeled:
+
+- `Search results`
+
+instead of the first product name.
+
+## CLI Debugging Status
+
+The CLI now supports debugging the inferred-discovery pipeline directly.
+
+Current commands:
+
+- `debug collections`
+  - prints collection candidates, sample items, and item-local controls
+- `debug snapshot`
+  - prints the inferred DOM snapshot summary: headings, landmarks, forms, interactives, collection candidates, and page text summary
+- `debug prompt`
+  - prints the exact inference system prompt sent to the LLM, including the full nested snapshot JSON
+
+There is also a startup env toggle:
+
+- `AAF_DEBUG_COLLECTIONS=true`
+
+This is useful because it lets us distinguish:
+
+- snapshot extraction failures
+- collection-candidate detection failures
+- prompt/model failures
+- post-inference normalization failures
 
 ## Important Constraint
 
