@@ -10,6 +10,7 @@ import type { LlmBackend } from '@agent-accessibility-framework/planner-local';
 import {
   buildInferenceSystemPrompt,
   type CollectionCandidate,
+  type CollectionCandidateItem,
   type DiscoverySnapshot,
   type RawInferenceResult,
   type RawInferredAction,
@@ -209,6 +210,64 @@ export interface InferredDiscoveryResult {
 
 function normalized(value: string | undefined): string {
   return (value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function scoreGroundedInteractive(
+  node: CollectionCandidateItem['interactives'][number],
+  roleNeedle: string,
+  nameNeedle: string,
+): number {
+  const nodeRole = normalized(node.role);
+  const nodeName = normalized(node.name || node.text);
+  const tagName = normalized(node.tagName);
+  let score = 0;
+
+  if (roleNeedle) {
+    if (nodeRole === roleNeedle) score += 5;
+    else if (roleNeedle === 'button' && (nodeRole === 'link' || tagName === 'a')) score += 2;
+  }
+
+  if (nameNeedle) {
+    if (nodeName === nameNeedle) score += 6;
+    else if (nodeName.includes(nameNeedle)) score += 4;
+    else if (nameNeedle.includes(nodeName) && nodeName) score += 2;
+  }
+
+  if (node.receivesPointerEvents !== false) score += 2;
+  if (node.pointerCursor) score += 1;
+  if (node.box && node.box.width > 0 && node.box.height > 0) score += 1;
+  if (tagName === 'button') score += 1;
+
+  return score;
+}
+
+function resolveGroundedCollectionTargets(
+  targetRole: string | undefined,
+  targetName: string | undefined,
+  candidate: CollectionCandidate,
+): {
+  representative?: { selector: string; role?: string; name?: string };
+  byItem: Record<string, string>;
+} {
+  const roleNeedle = normalized(targetRole);
+  const nameNeedle = normalized(targetName);
+  const byItem: Record<string, string> = {};
+  let representative: { selector: string; role?: string; name?: string } | undefined;
+
+  for (const item of candidate.items) {
+    const ranked = item.interactives
+      .map((node) => ({ node, score: scoreGroundedInteractive(node, roleNeedle, nameNeedle) }))
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score);
+    const best = ranked[0]?.node;
+    if (!best) continue;
+    byItem[item.itemId] = best.selector;
+    if (!representative) {
+      representative = { selector: best.selector, role: best.role, name: best.name || best.text };
+    }
+  }
+
+  return { representative, byItem };
 }
 
 function isLowValueNavigationAction(
@@ -420,9 +479,11 @@ function normalizeCollection(
   const templates: DiscoveredCollectionActionTemplate[] = [];
   for (const template of raw.actionTemplates) {
     const actionName = normalizeCollectionActionName(template.action, raw.title, pageType, seen);
-    const representative = resolveCollectionTemplate(template.targetRole, template.targetName, candidate);
-    const supported = template.supported !== false && Boolean(representative);
-    const unsupportedReason = !representative
+    const groundedTargets = resolveGroundedCollectionTargets(template.targetRole, template.targetName, candidate);
+    const representative = groundedTargets.representative;
+    const supportRatio = candidate.items.length > 0 ? Object.keys(groundedTargets.byItem).length / candidate.items.length : 0;
+    const supported = template.supported !== false && Boolean(representative) && supportRatio >= 0.5;
+    const unsupportedReason = !representative || supportRatio < 0.5
       ? template.unsupportedReason || 'Collection action could not be grounded within repeated items'
       : template.unsupportedReason;
     const templateIntent = normalizeIntent(template.intent);
@@ -449,6 +510,7 @@ function normalizeCollection(
         collectionId: candidate.collectionId,
         collectionSelector: candidate.selector,
         itemSelectorById: Object.fromEntries(candidate.items.map((item) => [item.itemId, item.selector])),
+        groundedTargetSelectorByItem: groundedTargets.byItem,
         itemSummaries: candidate.items.map((item) => ({
           itemId: item.itemId,
           title: item.title || item.keyTexts[0] || item.summary,
@@ -561,25 +623,6 @@ function normalizeCollectionActionName(rawAction: string, title: string, pageTyp
     evidence: [],
   };
   return normalizeActionName(synthetic, pageType, seen);
-}
-
-function resolveCollectionTemplate(
-  targetRole: string | undefined,
-  targetName: string | undefined,
-  candidate: CollectionCandidate,
-): { selector: string; role?: string; name?: string } | undefined {
-  const roleNeedle = normalized(targetRole);
-  const nameNeedle = normalized(targetName);
-  for (const item of candidate.items) {
-    for (const node of item.interactives) {
-      const roleMatch = !roleNeedle || normalized(node.role) === roleNeedle;
-      const nameMatch = !nameNeedle || normalized(node.name || node.text).includes(nameNeedle);
-      if (roleMatch && nameMatch) {
-        return { selector: node.selector, role: node.role, name: node.name || node.text };
-      }
-    }
-  }
-  return undefined;
 }
 
 export class InferredActionDiscoverer {

@@ -42,6 +42,26 @@ const DOM_SNAPSHOT_SCRIPT = String.raw`
       && rect.height >= 0;
   }
 
+  function receivesPointerEvents(el) {
+    const style = window.getComputedStyle(el);
+    return style.pointerEvents !== 'none';
+  }
+
+  function pointerCursor(el) {
+    const style = window.getComputedStyle(el);
+    return style.cursor === 'pointer';
+  }
+
+  function elementBox(el) {
+    const rect = el.getBoundingClientRect();
+    return {
+      x: Math.round(rect.left),
+      y: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    };
+  }
+
   function getHeading(el) {
     const container = el.closest('section, article, form, dialog, [role="dialog"], main, aside');
     const heading = container ? container.querySelector('h1, h2, h3, h4, h5, h6') : null;
@@ -180,6 +200,7 @@ const DOM_SNAPSHOT_SCRIPT = String.raw`
       const landmark = getLandmark(el);
       return {
         elementId: ensureId(el),
+        tagName: tag,
         role,
         ...(name ? { name } : {}),
         ...(text ? { text } : {}),
@@ -193,6 +214,9 @@ const DOM_SNAPSHOT_SCRIPT = String.raw`
         ...(heading ? { heading } : {}),
         ...(landmark ? { landmark } : {}),
         visible: true,
+        receivesPointerEvents: receivesPointerEvents(el),
+        pointerCursor: pointerCursor(el),
+        box: elementBox(el),
         selector: '[' + ATTR + '="' + ensureId(el) + '"]',
       };
     });
@@ -286,9 +310,13 @@ const DOM_SNAPSHOT_SCRIPT = String.raw`
             const elementId = ensureId(node);
             return {
               elementId,
+              tagName: tag,
               role,
               ...(name ? { name } : {}),
               ...(text ? { text } : {}),
+              receivesPointerEvents: receivesPointerEvents(node),
+              pointerCursor: pointerCursor(node),
+              box: elementBox(node),
               selector: '[' + ATTR + '="' + elementId + '"]',
             };
           });

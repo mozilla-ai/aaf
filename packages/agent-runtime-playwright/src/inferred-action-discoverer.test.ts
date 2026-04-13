@@ -267,5 +267,6 @@ describe('normalizeInferenceResult', () => {
     expect(result.catalog.actions[0].action).toBe('cart.add_item');
     expect(result.catalog.actions[0].fields[0].field).toBe('item_name');
     expect(result.resolvedActions.get('cart.add_item')?.collectionScope?.itemSummaries[1].title).toBe('Widget Beta');
+    expect(result.resolvedActions.get('cart.add_item')?.collectionScope?.groundedTargetSelectorByItem?.item_2).toBe('[data-aaf-inferred-id="cart_2"]');
   });
 });

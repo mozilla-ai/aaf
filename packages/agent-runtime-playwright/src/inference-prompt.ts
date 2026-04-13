@@ -9,6 +9,7 @@ export interface AccessibilityNodeSummary {
 
 export interface InteractiveNode {
   elementId: string;
+  tagName?: string;
   role: string;
   name?: string;
   text?: string;
@@ -22,6 +23,14 @@ export interface InteractiveNode {
   heading?: string;
   landmark?: string;
   visible: boolean;
+  receivesPointerEvents?: boolean;
+  pointerCursor?: boolean;
+  box?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
   selector: string;
 }
 
@@ -42,9 +51,18 @@ export interface CollectionCandidateItem {
   interactiveIds: string[];
   interactives: Array<{
     elementId: string;
+    tagName?: string;
     role: string;
     name?: string;
     text?: string;
+    receivesPointerEvents?: boolean;
+    pointerCursor?: boolean;
+    box?: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    };
     selector: string;
   }>;
 }

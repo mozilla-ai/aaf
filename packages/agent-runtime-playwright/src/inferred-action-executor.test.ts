@@ -108,7 +108,6 @@ describe('InferredActionExecutor partial execution', () => {
     const click = vi.fn(async () => undefined);
     const count = vi.fn(async () => 1);
     const evaluate = vi.fn(async () => 'button "Add to cart"');
-    const pageEvaluate = vi.fn(async () => '[data-aaf-inferred-id="cart_2"]');
 
     const locator = {
       first: () => locator,
@@ -119,7 +118,6 @@ describe('InferredActionExecutor partial execution', () => {
 
     const page = {
       locator: vi.fn(() => locator),
-      evaluate: pageEvaluate,
       url: vi.fn(() => 'https://example.com/products'),
       waitForLoadState: vi.fn(async () => undefined),
       waitForURL: vi.fn(async () => undefined),
@@ -141,6 +139,10 @@ describe('InferredActionExecutor partial execution', () => {
           item_1: '[data-aaf-inferred-id="item_1"]',
           item_2: '[data-aaf-inferred-id="item_2"]',
         },
+        groundedTargetSelectorByItem: {
+          item_1: '[data-aaf-inferred-id="cart_1"]',
+          item_2: '[data-aaf-inferred-id="cart_2"]',
+        },
         itemSummaries: [
           { itemId: 'item_1', title: 'Widget Alpha', summary: 'Widget Alpha Add to cart', keyTexts: ['Widget Alpha'], interactiveIds: ['cart_1'] },
           { itemId: 'item_2', title: 'Widget Beta', summary: 'Widget Beta Add to cart', keyTexts: ['Widget Beta'], interactiveIds: ['cart_2'] },
@@ -153,7 +155,6 @@ describe('InferredActionExecutor partial execution', () => {
 
     const result = await executor.execute(page as never, action, { item_name: 'Widget Beta' });
 
-    expect(pageEvaluate).toHaveBeenCalled();
     expect(click).toHaveBeenCalled();
     expect(result.status).toBe('completed');
     expect(result.execution_details).toContain('resolved item_name -> "Widget Beta"');

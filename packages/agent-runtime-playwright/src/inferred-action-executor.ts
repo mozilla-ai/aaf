@@ -14,6 +14,7 @@ export interface ResolvedInferredCollectionScope {
   collectionId: string;
   collectionSelector: string;
   itemSelectorById: Record<string, string>;
+  groundedTargetSelectorByItem?: Record<string, string>;
   itemSummaries: Array<{
     itemId: string;
     title: string;
@@ -124,31 +125,7 @@ export class InferredActionExecutor {
         };
       }
 
-      const scopedSelector = await page.evaluate(
-        ({ itemSelector, role, name }) => {
-          const root = document.querySelector(itemSelector);
-          if (!root) return null;
-          const candidates = Array.from(root.querySelectorAll('button, a[href], [role="button"], [role="link"]'));
-          const roleNeedle = (role || '').replace(/\s+/g, ' ').trim().toLowerCase();
-          const nameNeedle = (name || '').replace(/\s+/g, ' ').trim().toLowerCase();
-          for (const el of candidates) {
-            const elementRole = (el.getAttribute('role') || el.tagName.toLowerCase()).replace(/\s+/g, ' ').trim().toLowerCase();
-            const elementName = (el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
-            const roleMatch = !roleNeedle || elementRole === roleNeedle || (roleNeedle === 'button' && elementRole === 'a');
-            const nameMatch = !nameNeedle || elementName.includes(nameNeedle);
-            if (roleMatch && nameMatch) {
-              const inferredId = el.getAttribute('data-aaf-inferred-id');
-              if (inferredId) return `[data-aaf-inferred-id="${inferredId}"]`;
-            }
-          }
-          return null;
-        },
-        {
-          itemSelector,
-          role: action.collectionScope.targetRole,
-          name: action.collectionScope.targetName,
-        },
-      );
+      const scopedSelector = action.collectionScope.groundedTargetSelectorByItem?.[match.itemId];
 
       if (!scopedSelector) {
         return {
