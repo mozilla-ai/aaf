@@ -17,6 +17,10 @@ Current behavior:
 - inferred collections can now be normalized into parameterized item-scoped inferred actions
 - inferred item-scoped actions now resolve the requested item before clicking the item-local target
 - the CLI now has snapshot / collection / prompt debugging commands for inferred-mode inspection
+- inferred grounding now uses richer per-element metadata inspired by Pilo-style accessibility-tree grounding
+- inferred form fields now support `url`
+- inferred form fields now support `radio-group`
+- the CLI now prints supported options for `select`, `radio`, and `radio-group` fields when they are available
 
 ## What Was Added
 
@@ -32,6 +36,10 @@ The project now supports:
 - item-scoped inferred execution for repeated-item pages
 - local debugging of raw inferred snapshots, collection candidates, and the exact inference prompt
 - a dedicated unannotated repeated-item fixture for local testing
+- richer grounding metadata on inferred interactives, including tag name, pointer behavior, and element box data
+- grouped radio-field inference and execution for arbitrary unannotated forms
+- option-aware CLI output for inferred form fields
+- real-site consent-check form execution with URL, radio-group, and select inputs
 
 ## What Was Validated
 
@@ -320,6 +328,115 @@ In other words:
 - repeated-item understanding improved
 - repeated-item execution grounding is still weak on messy production pages like Amazon search results
 
+### Real-Site Papaya Consent Checker Case
+
+The inferred path was later validated on:
+
+- `https://consentchecker.papayacomply.ai`
+
+Observed result:
+
+- no AAF manifest was present
+- the runtime inferred a primary consent-analysis workflow on the landing page
+- the inferred form included:
+  - `website_url <url>`
+  - `consent_flow <radio-group>`
+  - `region <select>`
+- the CLI printed the discovered radio-group and select options directly in the catalog
+- planning mapped a natural-language request into the correct semantic action with grounded arguments
+- execution filled the URL, selected the consent-flow radio option, selected the region, and clicked the start button successfully
+- after submit, the runtime rediscovered the next page and produced a new analysis-status action set
+
+Observed CLI output excerpt:
+
+```text
+[discover] Found 5 action(s) on https://papaya-consent-check-be11a0846ed5.herokuapp.com/ [inferred]
+  context: consent testing SaaS / consent check runner (0.94)
+  summary: Papaya Consent Checker landing/workspace page for starting a consent analysis on a target website, with consent flow and region options. The primary supported workflow is submitting a consent check analysis form. Login and pricing links are also present as workflow entry points.
+  consent_check.start_analysis (source:inferred, supported:yes, risk:low, confirm:optional, confidence:0.97)
+    field: website_url <url>
+    field: consent_flow <radio-group>
+    options: Accept All Cookies | Reject All Cookies | Global Privacy Control (GPC) | Define Granular Consent Flow
+    field: granular_consent_instructions <text>
+    field: region <select>
+    options: Default (California, US) | US-CA | US-NY | US-CO | ...
+
+aaf> Start an analysis for 'nature.com' with a Reject all flow in california
+[plan] Asking gpt-5.4 to map: "Start an analysis for 'nature.com' with a Reject all flow in california"
+✓ Planned: consent_check.start_analysis
+  args: {"website_url":"nature.com","consent_flow":"Reject All Cookies","region":"Default (California, US)"}
+
+[act] filled website_url -> Website URL with "nature.com"
+[act] selected consent_flow -> Consent Flow as "Reject All Cookies"
+[act] filled region -> Region (Geolocation) with "Default (California, US)"
+[act] clicked target -> button "Start Analysis Starting..."
+
+✓ Status: completed
+✓ Result: submitted inferred action "consent_check.start_analysis"
+```
+
+What this suggests:
+
+- the inferred path can now support richer real-world form controls than earlier in the project
+- `url` fields are now handled correctly as fillable inputs rather than being rejected
+- grouped radio choices can now be exposed semantically and resolved to real option elements at execution time
+- printing discovered options in the CLI materially improves debuggability and trust
+- page-local rediscovery after submit continues to work on real production apps
+
+This is a stronger validation than the earlier purely synthetic form examples because it exercises a real third-party page with a mixed-control form.
+
+## Pilo-Inspired Grounding
+
+One of the recent improvements was motivated by comparing this repo's inferred-mode grounding with the Pilo approach.
+
+The relevant idea taken from Pilo was not to replace AAF or inferred action discovery with a full YAML accessibility-tree flow, but to borrow the grounding mindset:
+
+- keep action discovery semantic
+- but make the discovered actions more tightly attached to real page elements
+
+Concretely, the inferred snapshot now carries richer per-element grounding metadata, including:
+
+- tag name
+- pointer-event availability
+- pointer-cursor signal
+- element box geometry
+
+This was added so that when the LLM infers an action like:
+
+- `cart.add_item`
+- `product.open`
+- `consent_check.start_analysis`
+
+the runtime has more than just a vague text/name match when grounding it.
+
+This helped shift the inferred pipeline toward:
+
+- semantic discovery from structured page snapshots
+- followed by more concrete grounding in actual DOM elements
+
+instead of relying purely on loose post-hoc fuzzy matching.
+
+### Why This Matters
+
+Earlier in the work, the system could often infer the right action name and arguments, but still fail during execution because the final click target was not grounded robustly enough.
+
+The Pilo-inspired changes improved this by:
+
+- enriching the snapshot before the LLM sees it
+- grounding collection actions against real per-item controls during normalization
+- preserving enough information for execution to act on real selectors instead of re-inferring the control at click time
+
+This does not make the runtime identical to Pilo.
+
+Important difference:
+
+- Pilo is fundamentally accessibility-tree-first
+- this repo is still semantic action discovery first
+
+But the recent work borrows the best part of that design:
+
+- improve grounding quality by carrying more concrete element evidence through the entire inferred-action pipeline
+
 ### Error Reporting Status
 
 Error reporting for inferred-action failures is now clearer than it was earlier in the run.
@@ -369,11 +486,13 @@ Important implementation detail:
 
 - collection candidates are detector output, not final semantic collections
 - they only become true inferred collections if the LLM returns a matching `collectionId`
+- once normalized, collection actions now keep grounded per-item target selectors rather than trying to rediscover the correct control at execution time
 
 This matters because we now have clear evidence that:
 
 - the detector can find repeated-item groups correctly
 - the prompt/model is still the weaker link for promoting those groups into collection action templates
+- and grounding quality improves when item-local controls are preserved directly from the snapshot
 
 ## Collection Naming Fix
 
@@ -534,6 +653,12 @@ This is useful because it lets us distinguish:
 - prompt/model failures
 - post-inference normalization failures
 
+Recent debugging improvements also make normal discovery output much more informative for form-heavy pages because the catalog now prints:
+
+- supported options for `select`
+- supported options for `radio`
+- supported options for `radio-group`
+
 ## Important Constraint
 
 The inferred-action system currently operates page by page.
@@ -668,6 +793,8 @@ Positive qualities:
 - produces semantic actions instead of selectors
 - can be tested in a real visible browser
 - has conservative safety behavior
+- increasingly grounds inferred actions in concrete DOM targets rather than loose text matches
+- can now handle mixed-control forms with URL inputs, selects, and grouped radio choices
 
 ## Current Limitations
 
@@ -703,6 +830,7 @@ At the current point in time:
 - the new inferred-discovery tests pass
 - the manual fixture demos work
 - the real-site demo works
+- recent real-site Papaya consent-check execution works end to end
 - the full suite is mostly green
 
 Remaining known unrelated test issue:

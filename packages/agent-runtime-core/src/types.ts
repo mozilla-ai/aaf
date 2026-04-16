@@ -104,7 +104,7 @@ export interface DiscoveredField {
   /** Format hint from the manifest schema (e.g. "email"). */
   format?: string;
   label?: string;
-  controlType?: 'text' | 'email' | 'password' | 'search' | 'number' | 'date' | 'select' | 'checkbox' | 'radio' | 'textarea' | 'unknown';
+  controlType?: 'text' | 'email' | 'password' | 'search' | 'number' | 'date' | 'url' | 'select' | 'checkbox' | 'radio' | 'radio-group' | 'textarea' | 'unknown';
 }
 
 export interface DiscoveredStatus {

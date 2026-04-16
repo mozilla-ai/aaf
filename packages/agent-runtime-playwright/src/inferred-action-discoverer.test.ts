@@ -269,4 +269,61 @@ describe('normalizeInferenceResult', () => {
     expect(result.resolvedActions.get('cart.add_item')?.collectionScope?.itemSummaries[1].title).toBe('Widget Beta');
     expect(result.resolvedActions.get('cart.add_item')?.collectionScope?.groundedTargetSelectorByItem?.item_2).toBe('[data-aaf-inferred-id="cart_2"]');
   });
+
+  it('falls back to DOM options for inferred select fields', () => {
+    const result = normalizeInferenceResult({
+      siteType: 'commerce',
+      pageType: 'search results',
+      summary: 'Filterable search results',
+      confidence: 0.94,
+      actions: [
+        {
+          action: 'filters.apply',
+          title: 'Apply filters',
+          kind: 'action',
+          intent: 'filter',
+          targetIds: ['el_3'],
+          fields: [
+            { field: 'origin', elementId: 'el_2', required: false, schemaType: 'string', label: 'Origin', controlType: 'select' },
+          ],
+          risk: 'low',
+          confirmation: 'optional',
+          idempotent: true,
+          confidence: 0.91,
+          expectedEffect: 'submit',
+          supported: true,
+          evidence: [{ kind: 'label', value: 'Origin' }],
+        },
+      ],
+    }, {
+      ...SNAPSHOT,
+      forms: [{ formId: 'form_1', name: 'Filters', fieldIds: ['el_2'], submitIds: ['el_3'] }],
+      interactives: [
+        {
+          elementId: 'el_2',
+          role: 'combobox',
+          name: 'Origin',
+          type: 'select',
+          options: ['Any', 'Spain', 'Italy'],
+          visible: true,
+          selector: '[data-aaf-inferred-id="el_2"]',
+          formId: 'form_1',
+        },
+        {
+          elementId: 'el_3',
+          role: 'button',
+          name: 'Apply filters',
+          text: 'Apply filters',
+          visible: true,
+          selector: '[data-aaf-inferred-id="el_3"]',
+          formId: 'form_1',
+        },
+      ],
+      pageTextSummary: 'Filter products by origin',
+      a11ySummary: [{ role: 'button', name: 'Apply filters' }],
+    });
+
+    expect(result.catalog.actions[0].fields[0].options).toEqual(['Any', 'Spain', 'Italy']);
+    expect(result.catalog.actions[0].fields[0].enumValues).toEqual(['Any', 'Spain', 'Italy']);
+  });
 });

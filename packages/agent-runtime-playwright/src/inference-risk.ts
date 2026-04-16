@@ -2,7 +2,7 @@ import type { DiscoveredAction } from '@agent-accessibility-framework/runtime-co
 import type { DiscoverySnapshot, RawInferredAction } from './inference-prompt.js';
 
 const HIGH_RISK_PATTERN = /\b(delete|remove|destroy|logout|sign out|pay|purchase|buy now|place order|checkout|confirm transfer|close account|reset|revoke)\b/i;
-const SUPPORTED_CONTROL_TYPES = new Set(['text', 'email', 'password', 'search', 'number', 'date', 'textarea', 'select', 'checkbox', 'radio']);
+const SUPPORTED_CONTROL_TYPES = new Set(['text', 'email', 'password', 'search', 'number', 'date', 'url', 'textarea', 'select', 'checkbox', 'radio', 'radio-group']);
 const PLACEHOLDER_UNSUPPORTED_REASONS = new Set(['optional', 'never', 'review', 'required', 'true', 'false', 'n/a', 'none']);
 
 export function sanitizeUnsupportedReason(reason: string | undefined): string | undefined {

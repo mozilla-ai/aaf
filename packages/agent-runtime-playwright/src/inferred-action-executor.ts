@@ -6,6 +6,7 @@ export interface ResolvedInferredField {
   selector: string;
   controlType: string;
   enumValues?: string[];
+  optionSelectors?: Record<string, string>;
   required?: boolean;
   label?: string;
 }
@@ -67,6 +68,25 @@ async function describeLocator(locator: Locator, fallback: string): Promise<stri
 
 function normalize(value: string | undefined): string {
   return (value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function resolveOptionSelector(
+  optionSelectors: Record<string, string> | undefined,
+  rawValue: unknown,
+): { label: string; selector: string } | null {
+  if (!optionSelectors) return null;
+  const entries = Object.entries(optionSelectors);
+  const needle = normalize(typeof rawValue === 'string' ? rawValue : String(rawValue ?? ''));
+  if (!needle) return null;
+
+  const exact = entries.find(([label]) => normalize(label) === needle);
+  if (exact) return { label: exact[0], selector: exact[1] };
+
+  const partialMatches = entries.filter(([label]) => normalize(label).includes(needle) || needle.includes(normalize(label)));
+  if (partialMatches.length === 1) {
+    return { label: partialMatches[0][0], selector: partialMatches[0][1] };
+  }
+  return null;
 }
 
 function findCollectionItem(
@@ -150,6 +170,19 @@ export class InferredActionExecutor {
           await locator.selectOption({ label: String(value) });
         });
         executionDetails.push(`filled ${field.field} -> ${label} with ${JSON.stringify(String(value))}`);
+      } else if (field.controlType === 'radio-group') {
+        const resolved = resolveOptionSelector(field.optionSelectors, value);
+        if (!resolved) {
+          return {
+            status: 'validation_error',
+            error: `Could not resolve option ${JSON.stringify(String(value))} for "${field.field}"`,
+          };
+        }
+        const optionLocator = page.locator(resolved.selector).first();
+        await optionLocator.check().catch(async () => {
+          await optionLocator.click();
+        });
+        executionDetails.push(`selected ${field.field} -> ${label} as ${JSON.stringify(resolved.label)}`);
       } else if (field.controlType === 'checkbox' || field.controlType === 'radio') {
         const desired = typeof value === 'boolean' ? value : String(value).toLowerCase() !== 'false';
         if (desired) {

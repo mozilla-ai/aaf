@@ -92,6 +92,10 @@ function printCatalog(catalog: ActionCatalog) {
     }
     for (const field of action.fields) {
       dim(`  field: ${field.field} <${field.controlType || field.tagName}>`);
+      const supportedOptions = field.enumValues?.length ? field.enumValues : field.options;
+      if (supportedOptions?.length && (field.controlType === 'select' || field.controlType === 'radio' || field.controlType === 'radio-group')) {
+        dim(`  options: ${supportedOptions.join(' | ')}`);
+      }
     }
   }
   console.log();

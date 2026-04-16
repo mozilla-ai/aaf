@@ -131,7 +131,9 @@ function mapControlType(field: RawInferredAction['fields'][number], nodeType?: s
     : nodeType === 'search' ? 'search'
     : nodeType === 'number' ? 'number'
     : nodeType === 'date' ? 'date'
+    : nodeType === 'url' ? 'url'
     : nodeType === 'checkbox' ? 'checkbox'
+    : nodeType === 'radio-group' ? 'radio-group'
     : nodeType === 'radio' ? 'radio'
     : 'text');
 }
@@ -361,10 +363,12 @@ export function normalizeInferenceResult(
 
     const fields: DiscoveredField[] = (normalized.fields || []).map((field) => {
       const node = snapshot.interactives.find((interactive) => interactive.elementId === field.elementId);
+      const enumValues = field.enumValues?.length ? field.enumValues : node?.options;
       return {
         field: field.field,
-        tagName: node?.type === 'select' ? 'select' : node?.type === 'textarea' ? 'textarea' : 'input',
-        ...(field.enumValues?.length ? { enumValues: field.enumValues } : {}),
+        tagName: node?.tagName || (node?.type === 'select' ? 'select' : node?.type === 'textarea' ? 'textarea' : 'input'),
+        ...(node?.options?.length ? { options: node.options } : {}),
+        ...(enumValues?.length ? { enumValues } : {}),
         ...(field.schemaType ? { schemaType: field.schemaType } : {}),
         ...(field.required !== undefined ? { required: field.required } : {}),
         ...(field.label ? { label: field.label } : {}),
@@ -373,12 +377,15 @@ export function normalizeInferenceResult(
     });
 
       const resolvedFields: ResolvedInferredField[] = (normalized.fields || []).map((field) => {
-        const selector = snapshot.interactives.find((interactive) => interactive.elementId === field.elementId)?.selector || '';
+        const node = snapshot.interactives.find((interactive) => interactive.elementId === field.elementId);
+        const selector = node?.selector || '';
+        const enumValues = field.enumValues?.length ? field.enumValues : node?.options;
         return {
           field: field.field,
           selector,
-          controlType: mapControlType(field, snapshot.interactives.find((interactive) => interactive.elementId === field.elementId)?.type),
-          ...(field.enumValues?.length ? { enumValues: field.enumValues } : {}),
+          controlType: mapControlType(field, node?.type),
+          ...(enumValues?.length ? { enumValues } : {}),
+          ...(node?.optionSelectors ? { optionSelectors: node.optionSelectors } : {}),
           ...(field.required !== undefined ? { required: field.required } : {}),
           ...(field.label ? { label: field.label } : {}),
         };

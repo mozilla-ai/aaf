@@ -159,4 +159,69 @@ describe('InferredActionExecutor partial execution', () => {
     expect(result.status).toBe('completed');
     expect(result.execution_details).toContain('resolved item_name -> "Widget Beta"');
   });
+
+  it('selects a concrete option for radio-group fields', async () => {
+    const check = vi.fn(async () => undefined);
+    const optionClick = vi.fn(async () => undefined);
+    const submitClick = vi.fn(async () => undefined);
+    const count = vi.fn(async () => 1);
+    const evaluate = vi.fn(async () => 'radiogroup "Consent flow"');
+
+    const groupLocator = {
+      first: () => groupLocator,
+      count,
+      evaluate,
+    };
+
+    const optionLocator = {
+      first: () => optionLocator,
+      count,
+      check,
+      click: optionClick,
+    };
+
+    const submitLocator = {
+      first: () => submitLocator,
+      count,
+      evaluate: vi.fn(async () => 'button "Start analysis"'),
+      click: submitClick,
+    };
+
+    const page = {
+      locator: vi.fn((selector: string) => selector === '#group'
+        ? groupLocator
+        : selector === '#cmp' || selector === '#banner'
+          ? optionLocator
+          : submitLocator),
+      url: vi.fn(() => 'https://example.com/checker'),
+      waitForLoadState: vi.fn(async () => undefined),
+      waitForURL: vi.fn(async () => undefined),
+      waitForTimeout: vi.fn(async () => undefined),
+    };
+
+    const executor = new InferredActionExecutor();
+    const action: ResolvedInferredAction = {
+      action: 'consent_check.start_analysis',
+      fields: [{
+        field: 'consent_flow',
+        selector: '#group',
+        controlType: 'radio-group',
+        label: 'Consent flow',
+        optionSelectors: {
+          'Banner only': '#banner',
+          'Full CMP': '#cmp',
+        },
+      }],
+      supported: true,
+      intent: 'submit',
+      risk: 'low',
+      targetSelectors: ['#submit'],
+    };
+
+    const result = await executor.execute(page as never, action, { consent_flow: 'Full CMP' });
+
+    expect(check).toHaveBeenCalled();
+    expect(submitClick).toHaveBeenCalled();
+    expect(result.execution_details).toContain('selected consent_flow -> Consent flow as "Full CMP"');
+  });
 });

@@ -19,6 +19,7 @@ export interface InteractiveNode {
   disabled?: boolean;
   checked?: boolean;
   options?: string[];
+  optionSelectors?: Record<string, string>;
   formId?: string;
   heading?: string;
   landmark?: string;

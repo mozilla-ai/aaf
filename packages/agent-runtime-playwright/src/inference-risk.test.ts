@@ -82,4 +82,94 @@ describe('applyInferenceRiskRules', () => {
     expect(result.supported).toBe(true);
     expect(result.risk).toBe('low');
   });
+
+  it('allows url fields for safe inferred form actions', () => {
+    const action: RawInferredAction = {
+      action: 'consent_check.start_analysis',
+      title: 'Start analysis',
+      kind: 'action',
+      intent: 'submit',
+      targetIds: ['el_1'],
+      fields: [
+        {
+          field: 'website_url',
+          elementId: 'el_2',
+          controlType: 'url',
+          required: true,
+        },
+      ],
+      risk: 'low',
+      confirmation: 'optional',
+      idempotent: true,
+      confidence: 0.96,
+      expectedEffect: 'submit',
+      supported: true,
+      evidence: [{ kind: 'label', value: 'Website URL' }],
+    };
+
+    const result = applyInferenceRiskRules(action, {
+      ...SNAPSHOT,
+      interactives: [
+        SNAPSHOT.interactives[0],
+        {
+          elementId: 'el_2',
+          role: 'textbox',
+          name: 'Website URL',
+          visible: true,
+          selector: '[data-aaf-inferred-id="el_2"]',
+          type: 'url',
+        },
+      ],
+      forms: [{ formId: 'form_1', fieldIds: ['el_2'], submitIds: ['el_1'] }],
+    });
+
+    expect(result.supported).toBe(true);
+    expect(result.unsupportedReason).toBeUndefined();
+  });
+
+  it('allows radio-group fields for safe inferred form actions', () => {
+    const action: RawInferredAction = {
+      action: 'consent_check.start_analysis',
+      title: 'Start analysis',
+      kind: 'action',
+      intent: 'submit',
+      targetIds: ['el_1'],
+      fields: [
+        {
+          field: 'consent_flow',
+          elementId: 'el_2',
+          controlType: 'radio-group',
+          required: true,
+          enumValues: ['Banner only', 'Full CMP'],
+        },
+      ],
+      risk: 'low',
+      confirmation: 'optional',
+      idempotent: true,
+      confidence: 0.96,
+      expectedEffect: 'submit',
+      supported: true,
+      evidence: [{ kind: 'label', value: 'Consent flow' }],
+    };
+
+    const result = applyInferenceRiskRules(action, {
+      ...SNAPSHOT,
+      interactives: [
+        SNAPSHOT.interactives[0],
+        {
+          elementId: 'el_2',
+          role: 'radiogroup',
+          name: 'Consent flow',
+          visible: true,
+          selector: '[data-aaf-inferred-id="el_2"]',
+          type: 'radio-group',
+          options: ['Banner only', 'Full CMP'],
+        },
+      ],
+      forms: [{ formId: 'form_1', fieldIds: ['el_2'], submitIds: ['el_1'] }],
+    });
+
+    expect(result.supported).toBe(true);
+    expect(result.unsupportedReason).toBeUndefined();
+  });
 });

@@ -112,6 +112,40 @@ const DOM_SNAPSHOT_SCRIPT = String.raw`
     return textOf(el);
   }
 
+  function radioOptionLabel(el) {
+    return labelFor(el)
+      || el.getAttribute('aria-label')
+      || textOf(el.closest('label'))
+      || textOf(el.parentElement)
+      || (el.getAttribute('value') || '').trim()
+      || undefined;
+  }
+
+  function radioGroupContainer(radios) {
+    const first = radios[0];
+    if (!first)
+      return undefined;
+
+    const explicit = first.closest('[role="radiogroup"], fieldset');
+    if (explicit)
+      return explicit;
+
+    const parent = first.parentElement;
+    return parent || undefined;
+  }
+
+  function radioGroupLabel(container, radios) {
+    const containerLabel = labelFor(container)
+      || container.getAttribute('aria-label')
+      || (container.tagName.toLowerCase() === 'fieldset' ? textOf(container.querySelector('legend')) : undefined)
+      || textOf(container.querySelector('legend, h1, h2, h3, h4, h5, h6'));
+    if (containerLabel)
+      return containerLabel;
+
+    const firstLabel = radioOptionLabel(radios[0]);
+    return firstLabel ? 'Choose ' + firstLabel : undefined;
+  }
+
   function collectionLabel(container, items) {
     const aria = container.getAttribute('aria-label');
     if (aria && normalizedText(aria))
@@ -221,15 +255,82 @@ const DOM_SNAPSHOT_SCRIPT = String.raw`
       };
     });
 
+  const nativeRadioGroups = new Map();
+  for (const radio of Array.from(document.querySelectorAll('input[type="radio"]')).filter((el) => isVisible(el))) {
+    const name = (radio.getAttribute('name') || '').trim();
+    if (!name)
+      continue;
+    const form = radio.closest('form');
+    const groupKey = 'native::' + (form ? ensureId(form) : 'no-form') + '::' + name;
+    const existing = nativeRadioGroups.get(groupKey) || [];
+    existing.push(radio);
+    nativeRadioGroups.set(groupKey, existing);
+  }
+
+  const ariaRadioGroups = new Map();
+  for (const radio of Array.from(document.querySelectorAll('[role="radio"]')).filter((el) => isVisible(el))) {
+    const group = radio.closest('[role="radiogroup"]');
+    if (!group)
+      continue;
+    const groupKey = 'aria::' + ensureId(group);
+    const existing = ariaRadioGroups.get(groupKey) || [];
+    existing.push(radio);
+    ariaRadioGroups.set(groupKey, existing);
+  }
+
+  const radioGroups = [...nativeRadioGroups.values(), ...ariaRadioGroups.values()]
+    .filter((group) => group.length >= 2)
+    .map((group) => {
+      const container = radioGroupContainer(group);
+      if (!container)
+        return undefined;
+      const options = [];
+      const optionSelectors = {};
+      for (const radio of group) {
+        const optionLabel = radioOptionLabel(radio);
+        if (!optionLabel || optionSelectors[optionLabel])
+          continue;
+        options.push(optionLabel);
+        optionSelectors[optionLabel] = '[' + ATTR + '="' + ensureId(radio) + '"]';
+      }
+      if (options.length === 0)
+        return undefined;
+      const form = container.closest('form') || group[0]?.closest('form');
+      const heading = getHeading(container);
+      const landmark = getLandmark(container);
+      return {
+        elementId: ensureId(container),
+        tagName: container.tagName.toLowerCase(),
+        role: 'radiogroup',
+        ...(radioGroupLabel(container, group) ? { name: radioGroupLabel(container, group) } : {}),
+        type: 'radio-group',
+        required: group.some((radio) => radio.hasAttribute('required') || radio.getAttribute('aria-required') === 'true'),
+        disabled: group.every((radio) => radio.hasAttribute('disabled') || radio.getAttribute('aria-disabled') === 'true'),
+        options,
+        optionSelectors,
+        ...(form ? { formId: ensureId(form) } : {}),
+        ...(heading ? { heading } : {}),
+        ...(landmark ? { landmark } : {}),
+        visible: true,
+        receivesPointerEvents: group.some((radio) => receivesPointerEvents(radio)),
+        pointerCursor: group.some((radio) => pointerCursor(radio)),
+        box: elementBox(container),
+        selector: '[' + ATTR + '="' + ensureId(container) + '"]',
+      };
+    })
+    .filter(Boolean);
+
+  const allInteractives = [...interactives, ...radioGroups];
+
   const forms = Array.from(document.querySelectorAll('form')).map((form) => {
     const formId = ensureId(form);
-    const fieldIds = interactives
+    const fieldIds = allInteractives
       .filter((node) => node.formId === formId && (
-        ['input', 'search', 'email', 'password', 'number', 'date', 'select', 'textarea', 'checkbox', 'radio', 'textbox', 'combobox', 'switch'].includes(node.role)
-        || ['text', 'search', 'email', 'password', 'number', 'date', 'select', 'textarea', 'checkbox', 'radio'].includes(node.type || '')
+        ['input', 'search', 'email', 'password', 'number', 'date', 'select', 'textarea', 'checkbox', 'radio', 'radiogroup', 'textbox', 'combobox', 'switch'].includes(node.role)
+        || ['text', 'search', 'email', 'password', 'number', 'date', 'select', 'textarea', 'checkbox', 'radio', 'radio-group'].includes(node.type || '')
       ))
       .map((node) => node.elementId);
-    const submitIds = interactives
+    const submitIds = allInteractives
       .filter((node) => node.formId === formId
         && (node.role === 'button' || node.role === 'link')
         && /submit|search|sign in|log in|continue|save|apply|send/i.test((node.name || '') + ' ' + (node.text || '')))
@@ -379,7 +480,7 @@ const DOM_SNAPSHOT_SCRIPT = String.raw`
     headings,
     landmarks,
     forms,
-    interactives,
+    interactives: allInteractives,
     collectionCandidates,
     pageTextSummary,
   };

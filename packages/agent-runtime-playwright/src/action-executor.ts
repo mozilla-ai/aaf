@@ -497,6 +497,9 @@ export class PlaywrightAdapter implements AAFAdapter {
       if ((field.format === 'email' || field.controlType === 'email') && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value))) {
         return { valid: false, errors: [`Field "${field.field}" must be an email`] };
       }
+      if (field.controlType === 'radio-group' && typeof value !== 'string') {
+        return { valid: false, errors: [`Field "${field.field}" must be a string`] };
+      }
       if ((field.controlType === 'checkbox' || field.controlType === 'radio') && typeof value !== 'boolean' && typeof value !== 'string') {
         return { valid: false, errors: [`Field "${field.field}" must be a boolean or string`] };
       }
