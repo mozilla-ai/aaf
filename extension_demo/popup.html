@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AAF Action Discovery</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <div>
+          <h1>AAF Action Discovery</h1>
+          <p>Inspect the active page and list explicit or inferred actions.</p>
+        </div>
+        <button id="discoverButton" class="primary">Discover</button>
+      </header>
+
+      <section class="card">
+        <label class="toggle">
+          <input id="useLlm" type="checkbox" />
+          <span>Use OpenAI LLM inference</span>
+        </label>
+        <div class="settings">
+          <label>
+            <span>OpenAI API Key</span>
+            <input id="apiKey" type="password" placeholder="sk-..." />
+          </label>
+          <label>
+            <span>Model</span>
+            <input id="model" type="text" placeholder="gpt-5.4" />
+          </label>
+        </div>
+        <details id="settingsPanel">
+          <summary>Advanced Settings</summary>
+          <div class="settings">
+            <label>
+              <span>API Base URL</span>
+              <input id="baseUrl" type="url" placeholder="https://api.openai.com/v1" />
+            </label>
+          </div>
+        </details>
+      </section>
+
+      <section class="card meta">
+        <div id="status">Ready.</div>
+        <div id="pageMeta"></div>
+      </section>
+
+      <section class="card">
+        <div class="sectionHeader">
+          <h2>Discovered Actions</h2>
+          <button id="copySnapshotButton" class="ghost">Copy Snapshot</button>
+        </div>
+        <div id="results" class="results empty">No actions discovered yet.</div>
+      </section>
+    </main>
+    <script src="./popup.js"></script>
+  </body>
+</html>
