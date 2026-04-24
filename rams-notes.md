@@ -694,6 +694,87 @@ Current observed limit:
 
 This is meant to improve practical usefulness on real sites like Amazon without weakening the current safety boundary for destructive or ambiguous actions.
 
+## Extension Demo
+
+A lightweight Chrome extension demo was added in:
+
+- `extension_demo/`
+
+The goal of this demo is to make the current-page discovery flow easy to try directly in the browser without going through the CLI.
+
+Current behavior:
+
+- the extension can be loaded unpacked in Chrome
+- clicking the extension on a webpage inspects the active tab
+- if the page exposes explicit AAF semantics, the extension lists those actions
+- otherwise it falls back to page-local discovery on the current DOM
+- it can optionally send the page snapshot to OpenAI for richer inferred-action discovery
+- the popup can copy the raw snapshot JSON for debugging
+
+Current extension files:
+
+- `extension_demo/manifest.json`
+- `extension_demo/popup.html`
+- `extension_demo/popup.css`
+- `extension_demo/popup.js`
+- `extension_demo/content-script.js`
+- `extension_demo/README.md`
+
+### Extension UX
+
+The extension is intentionally simple:
+
+- open any webpage
+- click the extension icon
+- click `Discover`
+
+By default, it can run local discovery without an API call.
+
+There is also an OpenAI-backed mode:
+
+- enable `Use OpenAI LLM inference`
+- paste an OpenAI API key
+- optionally change the model
+- click `Discover`
+
+This makes it a useful demonstration of how the page-local inferred-action pipeline could be adapted into a browser-extension product shape.
+
+### Extension Scope
+
+This demo is intentionally narrower than the Playwright runtime:
+
+- it focuses on discovery, not full action execution
+- it is current-page only
+- it is meant as a proof of concept for extension-based inspection, not a production browser agent
+
+Even so, it is important because it validates that the current architecture can be translated from:
+
+- Playwright-driven page inspection
+
+to:
+
+- content-script-driven page inspection inside a real browser extension
+
+### Extension Screenshots
+
+Extension screenshots now live in the subfolder:
+
+- `extension_screenshots/`
+
+Current screenshot files:
+
+- `extension_screenshots/Screenshot 2026-04-24 at 3.17.10 PM.png`
+- `extension_screenshots/Screenshot 2026-04-24 at 3.17.20 PM.png`
+- `extension_screenshots/Screenshot 2026-04-24 at 3.17.24 PM.png`
+- `extension_screenshots/Screenshot 2026-04-24 at 3.17.29 PM.png`
+
+These screenshots are useful for documenting:
+
+- the popup in local-discovery mode
+- the popup in OpenAI LLM mode
+- an example discovered action list on a real page
+- any screenshot showing snapshot-copy or debug-oriented output
+
 ## How Association Works
 
 There are now two different ways actions get associated with page elements.
