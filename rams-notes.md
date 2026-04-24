@@ -100,9 +100,9 @@ This is an important narrowing of the problem:
 
 - collection detection is working on the synthetic repeated-item page
 - the failure mode is no longer "the runtime cannot see the collection"
-- the remaining bottleneck is that the LLM still sometimes chooses not to emit a collection action template like `cart.add_item`
+- model choice still matters for whether the repeated-item structure is promoted into useful collection actions
 
-So at this point the open issue is mostly prompt/model behavior, not repeated-item snapshot extraction.
+So at this point the open issue is no longer repeated-item snapshot extraction itself. The remaining variability is mostly in model behavior and grounding quality on messier pages.
 
 ### Real-Site Validation
 
@@ -145,7 +145,7 @@ aaf> apply for the program
 ✓ Result: submitted inferred action "apply.submit"
 ```
 
-This is the strongest point-in-time validation so far because it worked on a non-AAF public website rather than only on synthetic fixtures.
+This was the strongest early point-in-time validation because it worked on a non-AAF public website rather than only on synthetic fixtures.
 
 ### Real-Site Negative Case
 
@@ -286,7 +286,7 @@ On the search-results page, the inference quality also improved:
   - `cart.add_item`
 - these appeared as item-scoped actions with `product_name` fields
 
-However, those repeated-item actions were still not executable.
+However, those repeated-item actions were still not executable in that Amazon page state.
 
 Observed result on search results:
 
@@ -325,8 +325,8 @@ What this suggests:
 
 In other words:
 
-- repeated-item understanding improved
-- repeated-item execution grounding is still weak on messy production pages like Amazon search results
+- repeated-item understanding improved materially
+- repeated-item execution grounding is still the main weakness on messy production pages like Amazon search results
 
 ### Real-Site Papaya Consent Checker Case
 
@@ -491,7 +491,7 @@ Important implementation detail:
 This matters because we now have clear evidence that:
 
 - the detector can find repeated-item groups correctly
-- the prompt/model is still the weaker link for promoting those groups into collection action templates
+- model behavior still affects whether those groups become useful collection actions
 - and grounding quality improves when item-local controls are preserved directly from the snapshot
 
 ## Collection Naming Fix
@@ -556,7 +556,7 @@ The biggest change in behavior came from switching from `gpt-4o-mini` to:
 
 - `gpt-5.4`
 
-and using native browser use in that flow.
+in the visible-browser CLI flow.
 
 With the stronger model, the inferred action set on the unannotated product-list page improved substantially. It inferred:
 
@@ -622,12 +622,12 @@ It suggests that:
 - item-local control capture is working
 - collection-aware normalization is working
 - item-scoped execution is working
-- model quality matters a lot for whether repeated-item candidates are promoted into useful collection actions
+- model quality still matters a lot for whether repeated-item candidates are promoted into useful collection actions
 
 At this point, the remaining concern is less about whether the runtime can support collections at all, and more about:
 
 - how reliably different models will infer them
-- how deterministic the inferred action names are across rediscovery
+- how deterministic the inferred action names and action sets are across rediscovery
 
 ## CLI Debugging Status
 
@@ -831,7 +831,7 @@ At the current point in time:
 - the manual fixture demos work
 - the real-site demo works
 - recent real-site Papaya consent-check execution works end to end
-- the full suite is mostly green
+- the suite is largely green aside from a known unrelated `aaf-lint` branch-name test issue
 
 Remaining known unrelated test issue:
 
@@ -852,6 +852,6 @@ Most useful next steps from here:
 Point-in-time summary:
 
 - inferred semantic actions for arbitrary unannotated pages are now working in the Playwright runtime
-- the feature has been validated both on local fixtures and on a real public site
+- the feature has been validated on local fixtures and on multiple real public sites, including a mixed-control SaaS form
 - it is practical for common accessible interactions
 - it remains intentionally constrained and page-local
