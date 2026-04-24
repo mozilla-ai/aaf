@@ -8,6 +8,7 @@ What it does:
 - lists explicit AAF actions when the page is annotated
 - otherwise falls back to heuristic discovery for common forms and visible controls
 - optionally sends the page snapshot to OpenAI to infer richer actions
+- can take a plain-text command, ask the LLM to map it to a discovered action, and execute it on the current page
 
 ## Load It In Chrome
 
@@ -44,9 +45,29 @@ If you need a different OpenAI-compatible endpoint, open `Advanced Settings` and
 
 The popup stores these values in `chrome.storage.local`.
 
+## Run Commands
+
+Once actions have been discovered in OpenAI mode:
+
+1. Type a plain-language command into the `Command` box
+2. Click `Run`
+
+Examples:
+
+- `Search for manchego cheese`
+- `Log in with alice@example.com`
+- `Start an analysis for nature.com with a Reject All flow`
+
+The extension will:
+
+- ask the LLM to map the command to one discovered action
+- fill the grounded fields on the page
+- click the grounded target when available
+- refresh discovery after execution
+
 ## Notes
 
 - This is a demo, not a production extension
-- It does discovery only; it does not execute actions
+- It now supports basic command planning and execution, but only for the current page
 - The local fallback is heuristic and intentionally simple
 - The LLM mode is closer to the repo's inferred-action direction, but still lightweight and extension-friendly

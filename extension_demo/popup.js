@@ -1,5 +1,6 @@
 const discoverButton = document.getElementById('discoverButton');
 const copySnapshotButton = document.getElementById('copySnapshotButton');
+const runCommandButton = document.getElementById('runCommandButton');
 const statusEl = document.getElementById('status');
 const pageMetaEl = document.getElementById('pageMeta');
 const resultsEl = document.getElementById('results');
@@ -7,8 +8,10 @@ const useLlmEl = document.getElementById('useLlm');
 const baseUrlEl = document.getElementById('baseUrl');
 const apiKeyEl = document.getElementById('apiKey');
 const modelEl = document.getElementById('model');
+const commandInputEl = document.getElementById('commandInput');
 
 let lastSnapshot = null;
+let lastCatalog = null;
 
 const STORAGE_KEY = 'aaf_extension_demo_settings';
 
@@ -41,9 +44,11 @@ function renderActions(payload, sourceLabel) {
     resultsEl.className = 'results empty';
     resultsEl.textContent = 'No actions found on this page.';
     renderMeta(payload, sourceLabel);
+    lastCatalog = payload || null;
     return;
   }
 
+  lastCatalog = payload;
   resultsEl.className = 'results';
   resultsEl.innerHTML = actions.map((action) => {
     const pills = [
@@ -138,6 +143,7 @@ Return EXACTLY one JSON object with this shape:
       "description": "optional",
       "supported": true,
       "confidence": 0.0,
+      "targetIds": ["ext_2"],
       "fields": [
         {
           "field": "query",
@@ -156,6 +162,7 @@ Rules:
 - Use only elementId values from the supplied snapshot interactives.
 - Prefer semantic dot-separated action names.
 - Prefer one action per form or important visible workflow.
+- Include grounded targetIds for the primary clickable/submit element whenever possible.
 - Include fields only when they are part of that action.
 - For select or radio-group fields, include enumValues when the snapshot provides options.
 - Mark clearly blocked or ambiguous actions as supported=false.
@@ -207,16 +214,19 @@ async function inferWithLlm(snapshot, settings) {
     supported: action.supported !== false,
     confidence: typeof action.confidence === 'number' ? action.confidence : undefined,
     source: 'llm',
+    targetElementId: Array.isArray(action.targetIds) && action.targetIds.length ? action.targetIds[0] : undefined,
     fields: Array.isArray(action.fields)
       ? action.fields.map((field) => {
         const node = snapshot.interactives.find((interactive) => interactive.elementId === field.elementId);
         return {
           field: field.field || field.elementId || 'field',
+          elementId: field.elementId,
           label: field.label || node?.name || '',
           controlType: field.controlType || node?.type || 'text',
           required: Boolean(field.required),
           options: node?.options,
           enumValues: Array.isArray(field.enumValues) ? field.enumValues : node?.options,
+          optionSelectors: node?.optionSelectors,
         };
       })
       : [],
@@ -229,6 +239,88 @@ async function inferWithLlm(snapshot, settings) {
       summary: parsed.summary || snapshot.pageTextSummary || '',
     },
     actions,
+  };
+}
+
+function buildPlannerPrompt(command, catalog) {
+  return `Map a user command to one discovered page action.
+Return EXACTLY one JSON object:
+{
+  "action": "search.submit",
+  "args": {
+    "query": "manchego cheese"
+  }
+}
+
+Rules:
+- Choose exactly one action from the provided catalog.
+- Use only field names that belong to the chosen action.
+- Prefer exact visible option values for select and radio-group fields when they are provided.
+- If no good action exists, return:
+  {
+    "action": "none",
+    "args": {}
+  }
+
+User command:
+${JSON.stringify(command)}
+
+Catalog:
+${JSON.stringify({
+  actions: (catalog?.actions || []).map((action) => ({
+    action: action.action,
+    title: action.title,
+    description: action.description,
+    supported: action.supported !== false,
+    fields: (action.fields || []).map((field) => ({
+      field: field.field,
+      label: field.label,
+      controlType: field.controlType,
+      required: field.required,
+      enumValues: field.enumValues || field.options || [],
+    })),
+  })),
+}, null, 2)}`;
+}
+
+async function planCommand(command, catalog, settings) {
+  const baseUrl = (settings.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '');
+  const url = `${baseUrl}/chat/completions`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${settings.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: settings.model,
+      messages: [
+        {
+          role: 'system',
+          content: buildPlannerPrompt(command, catalog),
+        },
+        {
+          role: 'user',
+          content: command,
+        },
+      ],
+      response_format: { type: 'json_object' },
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Planner request failed (${response.status}): ${text}`);
+  }
+
+  const payload = await response.json();
+  const content = payload?.choices?.[0]?.message?.content;
+  if (!content) throw new Error('Planner response did not include message content.');
+  const parsed = JSON.parse(content);
+  if (!parsed || typeof parsed !== 'object') throw new Error('Planner returned invalid JSON.');
+  return {
+    action: typeof parsed.action === 'string' ? parsed.action : 'none',
+    args: parsed.args && typeof parsed.args === 'object' ? parsed.args : {},
   };
 }
 
@@ -282,8 +374,80 @@ async function copySnapshot() {
   setStatus('Snapshot copied to clipboard.');
 }
 
+async function runCommand() {
+  try {
+    const command = commandInputEl.value.trim();
+    if (!command) {
+      throw new Error('Enter a command first.');
+    }
+
+    const tab = await getActiveTab();
+    await ensureContentScript(tab.id);
+
+    const settings = {
+      useLlm: useLlmEl.checked,
+      baseUrl: baseUrlEl.value.trim(),
+      apiKey: apiKeyEl.value.trim(),
+      model: modelEl.value.trim(),
+    };
+    await saveSettings();
+
+    if (!settings.useLlm) {
+      throw new Error('Enable "Use OpenAI LLM inference" to run commands.');
+    }
+    if (!settings.apiKey || !settings.model) {
+      throw new Error('OpenAI API key and model are required to run commands.');
+    }
+
+    if (!lastCatalog || !Array.isArray(lastCatalog.actions) || !lastCatalog.actions.length) {
+      setStatus('Discovering actions first...');
+      await discover();
+    }
+    if (!lastCatalog || !lastCatalog.actions?.length) {
+      throw new Error('No discovered actions are available to plan against.');
+    }
+
+    setStatus('Planning command...');
+    const plan = await planCommand(command, lastCatalog, settings);
+    if (plan.action === 'none') {
+      throw new Error('The planner could not map that command to an available action.');
+    }
+
+    const selectedAction = lastCatalog.actions.find((action) => action.action === plan.action);
+    if (!selectedAction) {
+      throw new Error(`Planned action "${plan.action}" was not found in the current catalog.`);
+    }
+
+    setStatus(`Executing ${plan.action}...`);
+    const result = await sendMessage(tab.id, {
+      type: 'AAF_EXTENSION_EXECUTE',
+      action: selectedAction,
+      args: plan.args,
+    });
+    if (result?.error) {
+      throw new Error(result.error);
+    }
+
+    if (Array.isArray(result?.executionDetails) && result.executionDetails.length) {
+      setStatus(result.executionDetails.join(' | '));
+    } else {
+      setStatus(result?.status === 'completed' ? `Completed ${plan.action}.` : `Finished ${plan.action}.`);
+    }
+
+    await discover();
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error), true);
+  }
+}
+
 discoverButton.addEventListener('click', discover);
 copySnapshotButton.addEventListener('click', copySnapshot);
+runCommandButton.addEventListener('click', runCommand);
+commandInputEl.addEventListener('keydown', (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+    runCommand();
+  }
+});
 useLlmEl.addEventListener('change', saveSettings);
 baseUrlEl.addEventListener('change', saveSettings);
 apiKeyEl.addEventListener('change', saveSettings);

@@ -308,6 +308,33 @@
     };
   }
 
+  function dispatchTextInput(el, value) {
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    if (nativeSetter && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
+      nativeSetter.call(el, value);
+    } else {
+      el.value = value;
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function setCheckboxLike(el, desired) {
+    if (typeof el.checked === 'boolean') {
+      el.checked = desired;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return;
+    }
+    if (desired) el.click();
+  }
+
+  function resolveElementById(elementId) {
+    if (!elementId) return null;
+    return document.querySelector(`[${ATTR}="${CSS.escape(elementId)}"]`);
+  }
+
   function explicitAafActions() {
     const roots = Array.from(document.querySelectorAll('[data-agent-kind="action"][data-agent-action]'));
     const seen = new Set();
@@ -329,10 +356,12 @@
           : undefined;
         fields.push({
           field: fieldName,
+          elementId: ensureId(fieldEl),
           controlType,
           label: labelFor(fieldEl) || fieldName,
           required: fieldEl.hasAttribute('required') || fieldEl.getAttribute('aria-required') === 'true',
           options,
+          optionSelectors: fieldEl.getAttribute('role') === 'radiogroup' ? collectRadioGroups().find((group) => group.elementId === ensureId(fieldEl))?.optionSelectors : undefined,
         });
       }
 
@@ -342,6 +371,7 @@
         description: `Explicit AAF action declared on the page.`,
         source: 'aaf',
         supported: true,
+        targetElementId: ensureId(root),
         fields,
       });
     }
@@ -405,12 +435,15 @@
       description,
       source: 'heuristic',
       supported: Boolean(submit),
+      targetElementId: submit?.elementId,
       fields: fieldNodes.map((node) => ({
         field: slug(node.name || node.elementId) || node.elementId,
+        elementId: node.elementId,
         controlType: node.type || 'text',
         label: node.name || node.elementId,
         required: Boolean(node.required),
         options: node.options,
+        optionSelectors: node.optionSelectors,
       })),
     };
   }
@@ -448,6 +481,7 @@
         description,
         source: 'heuristic',
         supported: true,
+        targetElementId: node.elementId,
         fields: [],
       });
     }
@@ -498,6 +532,114 @@
     return heuristicDiscovery(buildSnapshot());
   }
 
+  function executeAafAction(action, args) {
+    const root = document.querySelector(`[data-agent-kind="action"][data-agent-action="${action.action}"]`);
+    if (!root) {
+      return { status: 'execution_error', error: `AAF action "${action.action}" not found on page.` };
+    }
+
+    const executionDetails = [];
+    for (const field of action.fields || []) {
+      const value = args[field.field];
+      if (value === undefined) continue;
+
+      let fieldEl = root.querySelector(`[data-agent-kind="field"][data-agent-field="${field.field}"]`);
+      if (!fieldEl) {
+        fieldEl = document.querySelector(`[data-agent-kind="field"][data-agent-field="${field.field}"][data-agent-for-action="${action.action}"]`);
+      }
+      if (!fieldEl) continue;
+
+      if (field.controlType === 'select') {
+        fieldEl.value = String(value);
+        fieldEl.dispatchEvent(new Event('input', { bubbles: true }));
+        fieldEl.dispatchEvent(new Event('change', { bubbles: true }));
+        executionDetails.push(`filled ${field.field} -> ${JSON.stringify(String(value))}`);
+      } else if (field.controlType === 'checkbox' || field.controlType === 'radio') {
+        setCheckboxLike(fieldEl, typeof value === 'boolean' ? value : String(value).toLowerCase() !== 'false');
+        executionDetails.push(`set ${field.field}`);
+      } else {
+        dispatchTextInput(fieldEl, String(value));
+        executionDetails.push(`filled ${field.field} -> ${JSON.stringify(String(value))}`);
+      }
+    }
+
+    const nestedSubmit = root.querySelector('[data-agent-kind="action"][data-agent-action]');
+    const clickTarget = nestedSubmit || root;
+    if (!(clickTarget instanceof HTMLElement)) {
+      return { status: 'execution_error', error: `Click target for "${action.action}" not found.` };
+    }
+    clickTarget.click();
+    executionDetails.push(`clicked target -> ${textOf(clickTarget) || action.action}`);
+    return { status: 'completed', executionDetails };
+  }
+
+  function executeGroundedAction(action, args) {
+    const executionDetails = [];
+
+    for (const field of action.fields || []) {
+      const value = args[field.field];
+      if (value === undefined) continue;
+      const el = resolveElementById(field.elementId);
+      if (!el) {
+        return { status: 'execution_error', error: `Field "${field.field}" is no longer available on the page.` };
+      }
+
+      if (field.controlType === 'select') {
+        el.value = String(value);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        executionDetails.push(`filled ${field.field} -> ${JSON.stringify(String(value))}`);
+      } else if (field.controlType === 'radio-group') {
+        const desired = String(value).trim().toLowerCase();
+        const optionEntries = Object.entries(field.optionSelectors || {});
+        const match = optionEntries.find(([label]) => label.trim().toLowerCase() === desired)
+          || optionEntries.find(([label]) => label.trim().toLowerCase().includes(desired) || desired.includes(label.trim().toLowerCase()));
+        if (!match) {
+          return { status: 'validation_error', error: `Could not resolve option ${JSON.stringify(String(value))} for "${field.field}".` };
+        }
+        const optionEl = document.querySelector(match[1]);
+        if (!(optionEl instanceof HTMLElement)) {
+          return { status: 'execution_error', error: `Radio option target for "${field.field}" is no longer available.` };
+        }
+        if (typeof optionEl.checked === 'boolean') {
+          optionEl.checked = true;
+          optionEl.dispatchEvent(new Event('input', { bubbles: true }));
+          optionEl.dispatchEvent(new Event('change', { bubbles: true }));
+        } else {
+          optionEl.click();
+        }
+        executionDetails.push(`selected ${field.field} -> ${JSON.stringify(match[0])}`);
+      } else if (field.controlType === 'checkbox' || field.controlType === 'radio') {
+        setCheckboxLike(el, typeof value === 'boolean' ? value : String(value).toLowerCase() !== 'false');
+        executionDetails.push(`set ${field.field}`);
+      } else {
+        dispatchTextInput(el, String(value));
+        executionDetails.push(`filled ${field.field} -> ${JSON.stringify(String(value))}`);
+      }
+    }
+
+    const target = resolveElementById(action.targetElementId);
+    if (target instanceof HTMLElement) {
+      target.click();
+      executionDetails.push(`clicked target -> ${textOf(target) || action.action}`);
+      return { status: 'completed', executionDetails };
+    }
+
+    const firstField = action.fields?.[0] ? resolveElementById(action.fields[0].elementId) : null;
+    if (firstField instanceof HTMLElement && action.action === 'search.submit') {
+      firstField.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      firstField.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', bubbles: true }));
+      firstField.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+      executionDetails.push('pressed Enter fallback on primary field');
+      return { status: 'completed', executionDetails };
+    }
+
+    return {
+      status: 'awaiting_review',
+      executionDetails: [...executionDetails, 'submit target unresolved; fields filled for manual review'],
+    };
+  }
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     try {
       if (message?.type === 'AAF_EXTENSION_PING') {
@@ -510,6 +652,20 @@
       }
       if (message?.type === 'AAF_EXTENSION_GET_SNAPSHOT') {
         sendResponse(buildSnapshot());
+        return;
+      }
+      if (message?.type === 'AAF_EXTENSION_EXECUTE') {
+        const action = message.action;
+        const args = message.args && typeof message.args === 'object' ? message.args : {};
+        if (!action || typeof action.action !== 'string') {
+          sendResponse({ error: 'No action payload was provided.' });
+          return;
+        }
+        const result = action.source === 'aaf'
+          ? executeAafAction(action, args)
+          : executeGroundedAction(action, args);
+        sendResponse(result);
+        return;
       }
     } catch (error) {
       sendResponse({ error: error instanceof Error ? error.message : String(error) });
