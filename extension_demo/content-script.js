@@ -23,6 +23,10 @@
     return el.textContent.replace(/\s+/g, ' ').trim().slice(0, 160);
   }
 
+  function normalizedText(value) {
+    return (value || '').replace(/\s+/g, ' ').trim();
+  }
+
   function isVisible(el) {
     if (!el) return false;
     const style = window.getComputedStyle(el);
@@ -98,6 +102,76 @@
     }
     if (el.getAttribute('role') === 'radiogroup') return 'radio-group';
     return 'text';
+  }
+
+  function itemTitle(el) {
+    const preferred = el.querySelector('h1, h2, h3, h4, h5, h6, [data-title], strong, b');
+    const preferredText = textOf(preferred);
+    if (preferredText) return preferredText;
+    return textOf(el);
+  }
+
+  function getHeading(el) {
+    const container = el.closest('section, article, form, dialog, [role="dialog"], main, aside');
+    const heading = container ? container.querySelector('h1, h2, h3, h4, h5, h6') : null;
+    return textOf(heading);
+  }
+
+  function getLandmark(el) {
+    const landmark = el.closest('main, nav, aside, header, footer, form, section, [role="main"], [role="navigation"], [role="complementary"], [role="search"], [role="form"]');
+    if (!landmark) return '';
+    const role = landmark.getAttribute('role') || landmark.tagName.toLowerCase();
+    const name = landmark.getAttribute('aria-label') || textOf(landmark.querySelector('h1, h2, h3'));
+    return name ? `${role}:${name}` : role;
+  }
+
+  function collectionLabel(container, items) {
+    const aria = container.getAttribute('aria-label');
+    if (aria && normalizedText(aria)) return normalizedText(aria);
+
+    const itemSet = new Set(items);
+    const directChildren = Array.from(container.children);
+    for (const child of directChildren) {
+      if (itemSet.has(child)) continue;
+      const heading = child.matches('h1, h2, h3, h4, h5, h6')
+        ? child
+        : child.querySelector('h1, h2, h3, h4, h5, h6');
+      const text = textOf(heading);
+      if (text) return text;
+    }
+
+    let sibling = container.previousElementSibling;
+    while (sibling) {
+      const heading = sibling.matches('h1, h2, h3, h4, h5, h6')
+        ? sibling
+        : sibling.querySelector('h1, h2, h3, h4, h5, h6');
+      const text = textOf(heading);
+      if (text) return text;
+      sibling = sibling.previousElementSibling;
+    }
+
+    const section = container.closest('section, main, article');
+    if (section && section !== container) {
+      for (const child of Array.from(section.children)) {
+        if (child === container) break;
+        const heading = child.matches('h1, h2, h3, h4, h5, h6')
+          ? child
+          : child.querySelector('h1, h2, h3, h4, h5, h6');
+        const text = textOf(heading);
+        if (text) return text;
+      }
+    }
+
+    return '';
+  }
+
+  function structureSignature(el, interactiveSelector) {
+    const directChildren = Array.from(el.children).slice(0, 8).map((child) => child.tagName.toLowerCase()).join(',');
+    const roles = Array.from(el.querySelectorAll(interactiveSelector))
+      .slice(0, 8)
+      .map((node) => (node.getAttribute('role') || node.tagName.toLowerCase() || '').toLowerCase())
+      .join(',');
+    return [el.tagName.toLowerCase(), directChildren, roles].filter(Boolean).join('|');
   }
 
   function collectRadioGroups() {
@@ -234,6 +308,8 @@
           role,
           name,
           text: textOf(el),
+          heading: getHeading(el),
+          landmark: getLandmark(el),
           href: tag === 'a' ? el.getAttribute('href') || '' : '',
           type: inferControlType(el),
           required: el.hasAttribute('required') || el.getAttribute('aria-required') === 'true',
@@ -275,6 +351,21 @@
   }
 
   function buildSnapshot() {
+    const interactiveSelector = [
+      'a[href]',
+      'button',
+      'input',
+      'select',
+      'textarea',
+      '[role="button"]',
+      '[role="link"]',
+      '[role="checkbox"]',
+      '[role="radio"]',
+      '[role="switch"]',
+      '[role="textbox"]',
+      '[role="combobox"]',
+    ].join(', ');
+
     const interactives = collectInteractives();
     const forms = collectForms(interactives);
     const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6'))
@@ -294,8 +385,104 @@
     const pageTextSummary = Array.from(document.querySelectorAll('body *'))
       .map((el) => textOf(el))
       .filter(Boolean)
-      .slice(0, 60)
-      .join(' ');
+      .filter((text, index, arr) => arr.indexOf(text) === index)
+      .join(' ')
+      .slice(0, 3000);
+
+    const collectionCandidates = Array.from(document.querySelectorAll('body *'))
+      .map((container) => {
+        const children = Array.from(container.children).filter((child) => isVisible(child));
+        if (children.length < 3) return null;
+
+        const groups = new Map();
+        for (const child of children) {
+          const descendantInteractives = Array.from(child.querySelectorAll(interactiveSelector))
+            .filter((node) => isVisible(node));
+          const signature = [
+            child.tagName.toLowerCase(),
+            descendantInteractives.length,
+            descendantInteractives
+              .slice(0, 6)
+              .map((node) => (node.getAttribute('role') || node.tagName.toLowerCase()).toLowerCase())
+              .join(','),
+          ].join('|');
+          if (!groups.has(signature)) groups.set(signature, []);
+          groups.get(signature).push(child);
+        }
+
+        let bestGroup = null;
+        for (const group of groups.values()) {
+          if (group.length < 3) continue;
+          if (!bestGroup || group.length > bestGroup.length) bestGroup = group;
+        }
+        if (!bestGroup) return null;
+
+        const items = bestGroup.map((child) => {
+          const itemId = ensureId(child);
+          const localInteractives = Array.from(child.querySelectorAll(interactiveSelector))
+            .filter((node) => isVisible(node))
+            .map((node) => {
+              const tag = node.tagName.toLowerCase();
+              const text = textOf(node);
+              const name = labelFor(node) || node.getAttribute('aria-label') || ((tag === 'button' || tag === 'a') ? text : '') || node.getAttribute('placeholder') || '';
+              const role = node.getAttribute('role')
+                || (tag === 'a' ? 'link' : tag === 'button' ? 'button' : tag === 'select' ? 'combobox' : tag === 'textarea' ? 'textbox' : tag === 'input' ? (node.type || 'textbox') : tag);
+              const elementId = ensureId(node);
+              return {
+                elementId,
+                tagName: tag,
+                role,
+                name,
+                text,
+                heading: getHeading(node),
+                landmark: getLandmark(node),
+                receivesPointerEvents: receivesPointerEvents(node),
+                pointerCursor: pointerCursor(node),
+                box: elementBox(node),
+                selector: `[${ATTR}="${elementId}"]`,
+              };
+            });
+          const interactiveIds = localInteractives.map((node) => node.elementId);
+          const textSummary = normalizedText(child.textContent || '').slice(0, 240);
+          const keyTexts = Array.from(child.querySelectorAll('h1, h2, h3, h4, h5, h6, strong, b, [aria-label], img[alt]'))
+            .map((node) => {
+              const aria = node.getAttribute ? node.getAttribute('aria-label') : '';
+              const alt = node.getAttribute ? node.getAttribute('alt') : '';
+              return normalizedText(aria || node.textContent || alt || '');
+            })
+            .filter(Boolean)
+            .slice(0, 6);
+          return {
+            itemId,
+            selector: `[${ATTR}="${itemId}"]`,
+            title: itemTitle(child),
+            summary: textSummary || itemTitle(child) || child.tagName.toLowerCase(),
+            heading: getHeading(child),
+            landmark: getLandmark(child),
+            keyTexts: keyTexts.length > 0 ? keyTexts : [textSummary || itemTitle(child) || child.tagName.toLowerCase()],
+            interactiveIds,
+            interactives: localInteractives,
+          };
+        }).filter((item) => item.interactiveIds.length > 0 || item.summary);
+
+        if (items.length < 3) return null;
+        const uniqueInteractiveLabels = new Set(items.flatMap((item) => item.interactives.map((node) => normalizedText(node.name || node.text || '')).filter(Boolean)));
+        if (uniqueInteractiveLabels.size === 0) return null;
+
+        const collectionId = ensureId(container);
+        return {
+          collectionId,
+          containerId: collectionId,
+          selector: `[${ATTR}="${collectionId}"]`,
+          label: collectionLabel(container, bestGroup),
+          itemIds: items.map((item) => item.itemId),
+          itemCount: items.length,
+          structureSignature: structureSignature(bestGroup[0], interactiveSelector),
+          items,
+        };
+      })
+      .filter((candidate, index, arr) => candidate && arr.findIndex((other) => other && other.collectionId === candidate.collectionId) === index)
+      .slice(0, 12);
 
     return {
       url: window.location.href,
@@ -304,6 +491,7 @@
       landmarks,
       forms,
       interactives,
+      collectionCandidates,
       pageTextSummary,
     };
   }
@@ -333,6 +521,55 @@
   function resolveElementById(elementId) {
     if (!elementId) return null;
     return document.querySelector(`[${ATTR}="${CSS.escape(elementId)}"]`);
+  }
+
+  function resolveFirstElement(selectors) {
+    for (const selector of selectors || []) {
+      if (!selector) continue;
+      const el = document.querySelector(selector);
+      if (el) return el;
+    }
+    return null;
+  }
+
+  function normalize(value) {
+    return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
+  function resolveOptionSelector(optionSelectors, rawValue) {
+    if (!optionSelectors) return null;
+    const entries = Object.entries(optionSelectors);
+    const needle = normalize(typeof rawValue === 'string' ? rawValue : String(rawValue ?? ''));
+    if (!needle) return null;
+
+    const exact = entries.find(([label]) => normalize(label) === needle);
+    if (exact) return { label: exact[0], selector: exact[1] };
+
+    const partialMatches = entries.filter(([label]) =>
+      normalize(label).includes(needle) || needle.includes(normalize(label)));
+    if (partialMatches.length === 1) {
+      return { label: partialMatches[0][0], selector: partialMatches[0][1] };
+    }
+    return null;
+  }
+
+  function findCollectionItem(scope, rawValue) {
+    const needle = normalize(rawValue);
+    if (!needle) return null;
+    const exact = scope.itemSummaries.find((item) =>
+      [item.title, item.summary, ...(item.keyTexts || [])].some((value) => normalize(value) === needle));
+    if (exact) return exact;
+    const partialMatches = scope.itemSummaries.filter((item) =>
+      [item.title, item.summary, ...(item.keyTexts || [])].some((value) => normalize(value).includes(needle)));
+    return partialMatches.length === 1 ? partialMatches[0] : null;
+  }
+
+  function canPartiallyExecute(action) {
+    return action.supported === false
+      && !action.collectionScope
+      && action.risk !== 'high'
+      && Array.isArray(action.fields)
+      && action.fields.length > 0;
   }
 
   function explicitAafActions() {
@@ -574,30 +811,60 @@
   }
 
   function executeGroundedAction(action, args) {
+    const partialMode = canPartiallyExecute(action);
+    if (!action.supported && !partialMode) {
+      return { status: 'execution_error', error: action.unsupportedReason || 'Inferred action is not supported' };
+    }
+
     const executionDetails = [];
+    let target = resolveFirstElement(action.targetSelectors) || resolveElementById(action.targetElementId);
+    if (action.collectionScope) {
+      const itemRef = args[action.collectionScope.itemRefField];
+      const match = findCollectionItem(action.collectionScope, itemRef);
+      if (!match) {
+        return { status: 'validation_error', error: `Could not uniquely resolve item reference for "${action.action}".` };
+      }
+      const selector = action.collectionScope.groundedTargetSelectorByItem?.[match.itemId];
+      if (!selector) {
+        return { status: 'execution_error', error: `Could not locate scoped collection target for "${action.action}".` };
+      }
+      target = document.querySelector(selector);
+      executionDetails.push(`resolved ${action.collectionScope.itemRefField} -> ${JSON.stringify(match.title)}`);
+    }
 
     for (const field of action.fields || []) {
+      if (action.collectionScope && field.field === action.collectionScope.itemRefField) continue;
       const value = args[field.field];
       if (value === undefined) continue;
-      const el = resolveElementById(field.elementId);
+      const el = resolveFirstElement([field.selector]) || resolveElementById(field.elementId);
       if (!el) {
         return { status: 'execution_error', error: `Field "${field.field}" is no longer available on the page.` };
       }
 
       if (field.controlType === 'select') {
-        el.value = String(value);
+        const desired = String(value).trim();
+        const nativeSelect = el instanceof HTMLSelectElement ? el : null;
+        if (!nativeSelect) {
+          return { status: 'execution_error', error: `Field "${field.field}" is not a selectable control.` };
+        }
+        const exact = Array.from(nativeSelect.options).find((option) =>
+          option.value === desired || option.textContent?.trim() === desired);
+        const fuzzy = exact || Array.from(nativeSelect.options).find((option) => {
+          const optionValue = normalize(option.value);
+          const optionLabel = normalize(option.textContent || '');
+          const needle = normalize(desired);
+          return optionValue === needle || optionLabel === needle || optionValue.includes(needle) || optionLabel.includes(needle);
+        });
+        nativeSelect.value = fuzzy?.value || desired;
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
-        executionDetails.push(`filled ${field.field} -> ${JSON.stringify(String(value))}`);
+        executionDetails.push(`filled ${field.field} -> ${JSON.stringify(fuzzy?.textContent?.trim() || desired)}`);
       } else if (field.controlType === 'radio-group') {
-        const desired = String(value).trim().toLowerCase();
-        const optionEntries = Object.entries(field.optionSelectors || {});
-        const match = optionEntries.find(([label]) => label.trim().toLowerCase() === desired)
-          || optionEntries.find(([label]) => label.trim().toLowerCase().includes(desired) || desired.includes(label.trim().toLowerCase()));
+        const match = resolveOptionSelector(field.optionSelectors, value);
         if (!match) {
           return { status: 'validation_error', error: `Could not resolve option ${JSON.stringify(String(value))} for "${field.field}".` };
         }
-        const optionEl = document.querySelector(match[1]);
+        const optionEl = document.querySelector(match.selector);
         if (!(optionEl instanceof HTMLElement)) {
           return { status: 'execution_error', error: `Radio option target for "${field.field}" is no longer available.` };
         }
@@ -608,7 +875,7 @@
         } else {
           optionEl.click();
         }
-        executionDetails.push(`selected ${field.field} -> ${JSON.stringify(match[0])}`);
+        executionDetails.push(`selected ${field.field} -> ${JSON.stringify(match.label)}`);
       } else if (field.controlType === 'checkbox' || field.controlType === 'radio') {
         setCheckboxLike(el, typeof value === 'boolean' ? value : String(value).toLowerCase() !== 'false');
         executionDetails.push(`set ${field.field}`);
@@ -618,20 +885,39 @@
       }
     }
 
-    const target = resolveElementById(action.targetElementId);
+    if (action.intent === 'toggle' && (!action.fields || action.fields.length === 0) && target instanceof HTMLElement) {
+      if (typeof target.checked === 'boolean') {
+        setCheckboxLike(target, !target.checked);
+      } else {
+        target.click();
+      }
+      executionDetails.push(`toggled target -> ${textOf(target) || action.action}`);
+      return { status: 'completed', executionDetails };
+    }
+
     if (target instanceof HTMLElement) {
       target.click();
       executionDetails.push(`clicked target -> ${textOf(target) || action.action}`);
       return { status: 'completed', executionDetails };
     }
 
-    const firstField = action.fields?.[0] ? resolveElementById(action.fields[0].elementId) : null;
-    if (firstField instanceof HTMLElement && action.action === 'search.submit') {
+    const firstField = action.fields?.[0]
+      ? resolveFirstElement([action.fields[0].selector]) || resolveElementById(action.fields[0].elementId)
+      : null;
+    if (partialMode && firstField instanceof HTMLElement && action.intent === 'search') {
+      firstField.focus?.();
       firstField.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       firstField.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', bubbles: true }));
       firstField.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
       executionDetails.push('pressed Enter fallback on primary field');
       return { status: 'completed', executionDetails };
+    }
+
+    if (partialMode) {
+      return {
+        status: 'awaiting_review',
+        executionDetails: [...executionDetails, 'submit target unresolved; fields filled for manual review'],
+      };
     }
 
     return {
