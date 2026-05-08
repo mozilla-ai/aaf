@@ -1,15 +1,36 @@
-# Agent Accessibility Framework (AAF)
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Agent Accessibility Framework (AAF)
 
 A proposal and prototype for making websites reliably operable by browser agents, using semantic DOM annotations (`data-agent-*`) and typed capability manifests. Agents interact with real UI through named actions and fields — never CSS selectors.
+
+npm workspaces monorepo (`packages/*`, `samples/*`). All packages are TypeScript ES modules.
 
 ## Quick Reference
 
 ```bash
-npm test              # Run all unit tests (vitest)
-npm run test:watch    # Watch mode
-npm run test:e2e      # Playwright E2E tests (requires billing app running)
-npm run benchmark     # Generate falsification reliability report
+npm install                      # Bootstraps all workspaces
+npm test                         # All unit tests (vitest)
+npm run test:watch               # Watch mode
+npm run test:e2e                 # Playwright E2E (start billing app first: cd samples/billing-app && npx vite)
+npm run benchmark                # Generates artifacts/reliability-report.md
+
+# Run a single package's tests
+npx vitest run packages/agent-runtime-core
+npx vitest run packages/aaf-contracts
+npx vitest run tests/falsification
+
+# Linter / site auditor
+npx aaf-lint --html <path> --manifest <path>           # Local file
+npx aaf-lint --audit <url> --render --crawl --safety   # Remote (--render needs playwright; auto-discovers manifest)
+
+# SDK codegen from a manifest
+npx agentgen --manifest <manifest.json> --output generated-sdk/
 ```
+
+The widget and planner require **Ollama** running locally (`ollama serve`, `ollama pull llama3.2`) to demo end-to-end against `samples/billing-app` (port 5173) or `samples/docs-site` (port 5174).
 
 ## Architecture (4 Layers)
 
@@ -22,22 +43,45 @@ npm run benchmark     # Generate falsification reliability report
 
 ```
 packages/
+  # Core
   agent-runtime-core/        # SemanticParser, ManifestValidator, PolicyEngine, ExecutionLogger
   agent-runtime-playwright/  # PlaywrightAdapter (AAFAdapter for headless testing)
-  aaf-lint/                  # HTML/manifest conformance linter + site auditor
-  agentgen/                  # SDK + CLI code generator from manifests
   aaf-contracts/             # PlannerRequest/RuntimeResponse types, validators, JSON schemas
+
+  # Planning + UI
   aaf-planner-local/         # Local LLM planner (Ollama client, prompt builder, response parser)
-  aaf-agent-widget/          # Embeddable agent chat widget (Ollama LLM, shadow DOM)
+  aaf-agent-widget/          # Embeddable agent chat widget (Ollama/OpenAI-compatible, shadow DOM)
+  aaf-agent-skill/           # Packaged "skill" definition for hosted agents
+
+  # Tooling / CLIs
+  aaf-lint/                  # HTML/manifest conformance linter + site auditor (binary: aaf-lint)
+  agentgen/                  # SDK + CLI code generator from manifests (binary: agentgen)
+  aaf-cli/                   # Top-level dev CLI
+  aaf-init/                  # Project scaffolder
+
+  # Framework adapters (all @agent-accessibility-framework/*)
+  aaf-next/                  # Next.js — AgentForm, withAgentAction
+  aaf-react/                 # React components/hooks
+  aaf-svelte/                # SvelteKit — AgentAction.svelte, server hook
+  aaf-vue/                   # Vue components/composables
+  aaf-vite-plugin/           # Vite plugin (manifest emit, dev integration)
+  aaf-eslint-plugin/         # Lint rules for data-agent-* usage in source
+  aaf-webmcp-bridge/         # Auto-registers AAF actions as navigator.modelContext tools (Chrome 146+)
+
 samples/
-  billing-app/               # Reference app with AAF annotations + widget (3 pages, 2 actions, 1 data view)
+  billing-app/               # Reference app + widget (3 pages, 2 actions, 1 data view) — port 5173
+  docs-site/                 # AAF-annotated docs site, demos data chat mode — port 5174
+  real-world-app/            # ProjectHub: 5 pages, 5 actions, 3 data views
+
 schemas/
   agent-manifest.schema.json # JSON Schema for manifest validation
 tests/
   conformance/               # Conformance test fixtures
   falsification/             # Selector vs semantic benchmark, safety, drift detection
-docs/                        # Spec documents (vision, standard, security)
+docs/                        # Spec documents (vision, standard, security, threat model, HTML proposal)
 ```
+
+When adding a feature that touches the planner→runtime contract, the change usually spans `aaf-contracts` (types/validators), `agent-runtime-core` (enforcement), `aaf-planner-local` (prompt + parser), and `aaf-agent-widget` (UI). Framework adapter packages mirror the same primitives per framework — keep the surface consistent across them.
 
 ## Core Concepts
 
