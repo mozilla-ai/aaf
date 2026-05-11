@@ -370,6 +370,32 @@ Observed:
 
 This is currently one of the best demonstrations of the richer inferred form path.
 
+### Real site: Sporcle (extension demo)
+
+Site:
+
+- `https://www.sporcle.com/`
+
+Observed:
+
+- the extension extracted the quiz inputs as grounded page actions
+- those inputs could then be filled one by one by giving the extension the next answer to enter
+- the extension successfully entered the supplied answers into the quiz fields
+
+Why this is interesting:
+
+- this is a nice proof that the package-backed extension path is not limited to static forms or toy pages
+- it shows that grounded current-page actions can support fast repeated entry workflows under time pressure
+- it suggests a compelling future composition with an agent runtime like Octonous:
+  - use the runtime to research or retrieve the quiz answers
+  - feed them one by one into grounded current-page actions
+  - complete the quiz within the time window
+
+Current interpretation:
+
+- the extension is already useful for “discover current-page inputs and act on them repeatedly”
+- chaining page-grounded actions with a stronger external reasoning/research agent could unlock higher-value browser-side workflows than simple one-shot form submit cases
+
 ## Extension Screenshots
 
 Screenshots live in:

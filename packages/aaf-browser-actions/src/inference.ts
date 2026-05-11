@@ -1,151 +1,18 @@
-const discoverButton = document.getElementById('discoverButton');
-const copySnapshotButton = document.getElementById('copySnapshotButton');
-const runCommandButton = document.getElementById('runCommandButton');
-const statusEl = document.getElementById('status');
-const pageMetaEl = document.getElementById('pageMeta');
-const resultsEl = document.getElementById('results');
-const useLlmEl = document.getElementById('useLlm');
-const baseUrlEl = document.getElementById('baseUrl');
-const apiKeyEl = document.getElementById('apiKey');
-const modelEl = document.getElementById('model');
-const commandInputEl = document.getElementById('commandInput');
-
-let lastSnapshot = null;
-let lastCatalog = null;
-
-const STORAGE_KEY = 'aaf_extension_demo_settings';
-
-function setStatus(message, isError = false) {
-  statusEl.textContent = message;
-  statusEl.className = isError ? 'error' : '';
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
-
-function renderMeta(payload, sourceLabel) {
-  const parts = [];
-  if (payload?.title) parts.push(`<strong>${escapeHtml(payload.title)}</strong>`);
-  if (payload?.url) parts.push(`<span>${escapeHtml(payload.url)}</span>`);
-  if (sourceLabel) parts.push(`<span>mode: ${escapeHtml(sourceLabel)}</span>`);
-  if (payload?.pageContext?.siteType || payload?.pageContext?.pageType) {
-    const context = [payload.pageContext.siteType, payload.pageContext.pageType].filter(Boolean).join(' / ');
-    const confidence = payload.pageContext.confidence !== undefined
-      ? ` (${Number(payload.pageContext.confidence).toFixed(2)})`
-      : '';
-    parts.push(`<span>context: ${escapeHtml(context)}${escapeHtml(confidence)}</span>`);
-  }
-  if (payload?.pageContext?.summary) parts.push(`<span>${escapeHtml(payload.pageContext.summary)}</span>`);
-  pageMetaEl.innerHTML = parts.join('<br />');
-}
-
-function renderActions(payload, sourceLabel) {
-  const actions = payload?.actions || [];
-  if (!actions.length) {
-    resultsEl.className = 'results empty';
-    resultsEl.textContent = 'No actions found on this page.';
-    renderMeta(payload, sourceLabel);
-    lastCatalog = payload || null;
-    return;
-  }
-
-  lastCatalog = payload;
-  resultsEl.className = 'results';
-  resultsEl.innerHTML = actions.map((action) => {
-    const pills = [
-      action.source ? `source:${action.source}` : sourceLabel ? `source:${sourceLabel}` : '',
-      action.supported === false ? 'supported:no' : 'supported:yes',
-      action.risk ? `risk:${action.risk}` : '',
-      action.confirmation ? `confirm:${action.confirmation}` : '',
-      action.confidence !== undefined ? `confidence:${Number(action.confidence).toFixed(2)}` : '',
-    ].filter(Boolean);
-    const fields = (action.fields || []).map((field) => {
-      const options = (field.enumValues?.length ? field.enumValues : field.options) || [];
-      return `
-        <div class="field">
-          <div><span class="fieldName">${escapeHtml(field.field)}</span> &lt;${escapeHtml(field.controlType || 'text')}&gt;</div>
-          ${field.label ? `<div>${escapeHtml(field.label)}</div>` : ''}
-          ${options.length ? `<div class="fieldOptions">options: ${escapeHtml(options.join(' | '))}</div>` : ''}
-        </div>
-      `;
-    }).join('');
-
-    return `
-      <article class="actionCard">
-        <div class="actionHeader">
-          <div class="actionName">${escapeHtml(action.action)}</div>
-          <div class="pillRow">${pills.map((pill) => `<span class="pill">${escapeHtml(pill)}</span>`).join('')}</div>
-        </div>
-        ${action.description ? `<div class="actionSummary">${escapeHtml(action.description)}</div>` : ''}
-        ${action.supported === false && action.unsupportedReason ? `<div class="actionSummary error">${escapeHtml(action.unsupportedReason)}</div>` : ''}
-        ${fields ? `<div class="fieldList">${fields}</div>` : ''}
-      </article>
-    `;
-  }).join('');
-
-  renderMeta(payload, sourceLabel);
-}
-
-async function getActiveTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) throw new Error('No active tab found.');
-  return tab;
-}
-
-function sendMessage(tabId, message) {
-  return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, message, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve(response);
-    });
-  });
-}
-
-async function ensureContentScript(tabId) {
-  try {
-    await sendMessage(tabId, { type: 'AAF_EXTENSION_PING' });
-  } catch {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ['content-script.js'],
-    });
-  }
-}
-
-async function loadSettings() {
-  const stored = await chrome.storage.local.get(STORAGE_KEY);
-  const settings = stored[STORAGE_KEY] || {};
-  useLlmEl.checked = Boolean(settings.useLlm);
-  baseUrlEl.value = settings.baseUrl || 'https://api.openai.com/v1';
-  apiKeyEl.value = settings.apiKey || '';
-  modelEl.value = settings.model || 'gpt-5.4';
-}
-
-async function saveSettings() {
-  await chrome.storage.local.set({
-    [STORAGE_KEY]: {
-      useLlm: useLlmEl.checked,
-      baseUrl: baseUrlEl.value.trim(),
-      apiKey: apiKeyEl.value.trim(),
-      model: modelEl.value.trim(),
-    },
-  });
-}
+import type {
+  BrowserAction,
+  BrowserActionCatalog,
+  BrowserActionIntent,
+  BrowserCollection,
+  BrowserControlType,
+  BrowserDiscoverySnapshot,
+  BrowserRawInferenceResult,
+} from './types.js';
 
 const HIGH_RISK_PATTERN = /\b(delete|remove|destroy|logout|sign out|pay|purchase|buy now|place order|checkout|confirm transfer|close account|reset|revoke)\b/i;
-const SUPPORTED_CONTROL_TYPES = new Set(['text', 'email', 'password', 'search', 'number', 'date', 'url', 'textarea', 'select', 'checkbox', 'radio', 'radio-group']);
+const SUPPORTED_CONTROL_TYPES = new Set<BrowserControlType>(['text', 'email', 'password', 'search', 'number', 'date', 'url', 'textarea', 'select', 'checkbox', 'radio', 'radio-group']);
 const PLACEHOLDER_UNSUPPORTED_REASONS = new Set(['optional', 'never', 'review', 'required', 'true', 'false', 'n/a', 'none']);
 
-function slug(value) {
+function slug(value: string | undefined): string {
   return String(value || '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
@@ -153,11 +20,11 @@ function slug(value) {
     .replace(/_+/g, '_');
 }
 
-function normalizeText(value) {
+function normalizeText(value: string | undefined): string {
   return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-function sanitizeUnsupportedReason(reason) {
+function sanitizeUnsupportedReason(reason: string | undefined): string | undefined {
   if (!reason) return undefined;
   const normalized = String(reason).trim();
   if (!normalized) return undefined;
@@ -165,7 +32,7 @@ function sanitizeUnsupportedReason(reason) {
   return normalized;
 }
 
-function normalizeIntent(intent) {
+function normalizeIntent(intent: string | undefined): BrowserActionIntent {
   const value = String(intent || 'unknown').toLowerCase().replace(/[\s-]+/g, '_');
   switch (value) {
     case 'login':
@@ -207,7 +74,7 @@ function normalizeIntent(intent) {
   }
 }
 
-function classifyPrefix(pageType, intent) {
+function classifyPrefix(pageType: string | undefined, intent: string | undefined): string {
   const page = String(pageType || '').toLowerCase();
   if (intent === 'search' || page.includes('search')) return 'search';
   if (intent === 'authenticate' || page.includes('login') || page.includes('sign in') || page.includes('auth')) return 'auth';
@@ -219,7 +86,7 @@ function classifyPrefix(pageType, intent) {
   return 'page';
 }
 
-function verbForIntent(intent) {
+function verbForIntent(intent: string | undefined): string {
   switch (intent) {
     case 'navigate':
     case 'open':
@@ -243,7 +110,7 @@ function verbForIntent(intent) {
   }
 }
 
-function normalizeActionName(rawAction, pageType, seen) {
+function normalizeActionName(rawAction: Pick<BrowserAction, 'action' | 'title' | 'description' | 'intent'>, pageType: string | undefined, seen: Set<string>): string {
   const prefix = slug(classifyPrefix(pageType, rawAction.intent)) || 'page';
   const verb = slug(verbForIntent(rawAction.intent)) || 'act';
   const objectHint = slug(rawAction.title || rawAction.description || String(rawAction.action || '').split('.').slice(-1)[0] || 'task') || 'task';
@@ -258,7 +125,7 @@ function normalizeActionName(rawAction, pageType, seen) {
   return deduped;
 }
 
-function mapControlType(field, nodeType) {
+function mapControlType(field: { controlType?: BrowserControlType }, nodeType?: string): BrowserControlType {
   return field.controlType || (nodeType === 'select' ? 'select'
     : nodeType === 'textarea' ? 'textarea'
       : nodeType === 'email' ? 'email'
@@ -273,7 +140,7 @@ function mapControlType(field, nodeType) {
                         : 'text');
 }
 
-function buildInferencePrompt(snapshot) {
+export function buildInferencePrompt(snapshot: BrowserDiscoverySnapshot): string {
   return `You classify web pages and infer agent-safe actions from structured accessibility and DOM data.
 Return EXACTLY one JSON object. Do not include markdown. Do not invent controls or element IDs.
 
@@ -364,39 +231,50 @@ Snapshot:
 ${JSON.stringify(snapshot, null, 2)}`;
 }
 
-function resolveTargetIds(action, snapshot) {
+function parseInference(rawOrParsed: string | BrowserRawInferenceResult): BrowserRawInferenceResult {
+  const parsed = typeof rawOrParsed === 'string'
+    ? JSON.parse(rawOrParsed) as BrowserRawInferenceResult
+    : rawOrParsed;
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.actions)) {
+    throw new Error('Inference response is missing an actions array.');
+  }
+  return parsed;
+}
+
+function resolveTargetIds(action: BrowserRawInferenceResult['actions'][number], snapshot: BrowserDiscoverySnapshot): string[] {
   const currentTargets = (action.targetIds || [])
     .map((id) => snapshot.interactives.find((node) => node.elementId === id))
     .filter(Boolean);
   const currentLooksExecutable = currentTargets.some((node) =>
-    (node.role === 'button' || node.role === 'link') && Boolean(node.name || node.text));
+    (node?.role === 'button' || node?.role === 'link') && Boolean(node.name || node.text));
   if (currentLooksExecutable) return action.targetIds || [];
   if (!['search', 'submit', 'authenticate', 'create', 'update', 'filter'].includes(action.intent || '')) return action.targetIds || [];
 
   const fieldNodes = (action.fields || [])
     .map((field) => snapshot.interactives.find((node) => node.elementId === field.elementId))
     .filter(Boolean);
-  const formIds = [...new Set(fieldNodes.map((node) => node.formId).filter(Boolean))];
+  const formIds = [...new Set(fieldNodes.map((node) => node?.formId).filter(Boolean))];
   if (formIds.length !== 1) return action.targetIds || [];
   const form = snapshot.forms.find((item) => item.formId === formIds[0]);
   if (!form || form.submitIds.length !== 1) return action.targetIds || [];
   return [form.submitIds[0]];
 }
 
-function applyInferenceRiskRules(action, snapshot) {
+function applyInferenceRiskRules(action: BrowserAction & { evidence?: Array<{ kind: string; value: string }> }, snapshot: BrowserDiscoverySnapshot): BrowserAction {
   const seedReason = sanitizeUnsupportedReason(action.unsupportedReason);
-  const targetNodes = (action.targetIds || [])
+  const targetNodes = (action.targetElementId ? [action.targetElementId] : [])
     .map((id) => snapshot.interactives.find((node) => node.elementId === id))
     .filter(Boolean);
   const targetText = [
     action.title,
     action.description,
-    ...(action.evidence || []).map((item) => item.value),
+    ...(action as { evidence?: Array<{ kind: string; value: string }> }).evidence?.map((item) => item.value) || [],
     ...targetNodes.flatMap((node) => [node?.name, node?.text, node?.href]),
   ].filter(Boolean).join(' ');
 
-  const next = {
+  const next: BrowserAction = {
     ...action,
+    fields: action.fields || [],
     ...(seedReason ? { unsupportedReason: seedReason } : {}),
     ...(action.supported ? {} : { supported: false }),
   };
@@ -416,7 +294,7 @@ function applyInferenceRiskRules(action, snapshot) {
     next.supported = false;
     next.unsupportedReason = next.unsupportedReason || 'Primary target lacks an accessible name';
   }
-  if (targetNodes.length !== (next.targetIds || []).length) {
+  if (targetNodes.length !== (action.targetSelectors || []).length && (action.targetSelectors || []).length > 0) {
     next.supported = false;
     next.unsupportedReason = next.unsupportedReason || 'Action references unknown elements';
   }
@@ -431,7 +309,7 @@ function applyInferenceRiskRules(action, snapshot) {
     }
   }
   if (['search', 'submit', 'authenticate', 'create', 'update', 'filter'].includes(next.intent || '')
-    && (next.targetIds || []).length !== 1) {
+    && (action.targetSelectors || []).length !== 1) {
     next.supported = false;
     next.unsupportedReason = next.unsupportedReason || 'Form actions require exactly one submit target';
   }
@@ -445,11 +323,11 @@ function applyInferenceRiskRules(action, snapshot) {
   return next;
 }
 
-function isLowValueNavigationAction(action, snapshot) {
+function isLowValueNavigationAction(action: BrowserAction & { evidence?: Array<{ kind: string; value: string }> }, snapshot: BrowserDiscoverySnapshot): boolean {
   if (!(action.intent === 'navigate' || action.intent === 'open')) return false;
   if ((action.fields || []).length > 0) return false;
-  if ((action.targetIds || []).length !== 1) return false;
-  const primary = snapshot.interactives.find((node) => node.elementId === action.targetIds[0]);
+  if ((action.targetSelectors || []).length !== 1 || !action.targetElementId) return false;
+  const primary = snapshot.interactives.find((node) => node.elementId === action.targetElementId);
   if (!primary || primary.role !== 'link') return false;
   const title = normalizeText(action.title);
   const description = normalizeText(action.description);
@@ -467,7 +345,11 @@ function isLowValueNavigationAction(action, snapshot) {
   return !meaningfulCuePattern.test(evidenceText);
 }
 
-function scoreGroundedInteractive(node, roleNeedle, nameNeedle) {
+function scoreGroundedInteractive(
+  node: NonNullable<BrowserDiscoverySnapshot['collectionCandidates']>[number]['items'][number]['interactives'][number],
+  roleNeedle: string,
+  nameNeedle: string,
+): number {
   const nodeRole = normalizeText(node.role);
   const nodeName = normalizeText(node.name || node.text);
   const tagName = normalizeText(node.tagName);
@@ -488,11 +370,18 @@ function scoreGroundedInteractive(node, roleNeedle, nameNeedle) {
   return score;
 }
 
-function resolveGroundedCollectionTargets(targetRole, targetName, candidate) {
+function resolveGroundedCollectionTargets(
+  targetRole: string | undefined,
+  targetName: string | undefined,
+  candidate: NonNullable<BrowserDiscoverySnapshot['collectionCandidates']>[number],
+): {
+  representative?: { selector: string; elementId: string; role?: string; name?: string };
+  byItem: Record<string, string>;
+} {
   const roleNeedle = normalizeText(targetRole);
   const nameNeedle = normalizeText(targetName);
-  const byItem = {};
-  let representative;
+  const byItem: Record<string, string> = {};
+  let representative: { selector: string; elementId: string; role?: string; name?: string } | undefined;
   for (const item of candidate.items) {
     const ranked = item.interactives
       .map((node) => ({ node, score: scoreGroundedInteractive(node, roleNeedle, nameNeedle) }))
@@ -506,7 +395,10 @@ function resolveGroundedCollectionTargets(targetRole, targetName, candidate) {
   return { representative, byItem };
 }
 
-function inferItemReferenceField(rawCollection, candidate) {
+function inferItemReferenceField(
+  rawCollection: NonNullable<BrowserRawInferenceResult['collections']>[number],
+  candidate: NonNullable<BrowserDiscoverySnapshot['collectionCandidates']>[number],
+): string {
   const explicit = (rawCollection.itemKeyFields || []).find((field) => field && field !== 'price');
   if (explicit) return explicit;
   const firstItem = candidate.items[0];
@@ -514,50 +406,11 @@ function inferItemReferenceField(rawCollection, candidate) {
   return 'item_ref';
 }
 
-function normalizeCollectionActionName(rawAction, title, pageType, seen) {
-  return normalizeActionName({
-    action: rawAction,
-    title,
-    description: title,
-    intent: normalizeIntent(rawAction.split('.').includes('open') ? 'open' : 'create'),
-  }, pageType, seen);
-}
-
-async function inferWithLlm(snapshot, settings) {
-  const baseUrl = (settings.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '');
-  const url = `${baseUrl}/chat/completions`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${settings.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: settings.model,
-      messages: [
-        {
-          role: 'system',
-          content: buildInferencePrompt(snapshot),
-        },
-        {
-          role: 'user',
-          content: 'Infer the actions available on this page.',
-        },
-      ],
-      response_format: { type: 'json_object' },
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`LLM request failed (${response.status}): ${text}`);
-  }
-
-  const payload = await response.json();
-  const content = payload?.choices?.[0]?.message?.content;
-  if (!content) throw new Error('LLM response did not include message content.');
-  const parsed = JSON.parse(content);
-  if (!Array.isArray(parsed.actions)) throw new Error('LLM response is missing an actions array.');
+export function normalizeInferenceResult(
+  rawOrParsed: string | BrowserRawInferenceResult,
+  snapshot: BrowserDiscoverySnapshot,
+): BrowserActionCatalog {
+  const parsed = parseInference(rawOrParsed);
   const normalizedParsed = {
     siteType: typeof parsed.siteType === 'string' ? parsed.siteType : 'unknown',
     pageType: typeof parsed.pageType === 'string' ? parsed.pageType : 'unknown',
@@ -585,52 +438,52 @@ async function inferWithLlm(snapshot, settings) {
       : [],
   };
 
-  const seen = new Set();
-  const actions = [];
-  const collections = [];
+  const seen = new Set<string>();
+  const actions: BrowserAction[] = [];
+  const collections: BrowserCollection[] = [];
 
   for (const action of normalizedParsed.actions) {
-    const normalizedAction = applyInferenceRiskRules({
-      ...action,
-      targetIds: resolveTargetIds(action, snapshot),
-    }, snapshot);
-    if (isLowValueNavigationAction(normalizedAction, snapshot)) continue;
-
-    const actionName = normalizeActionName(normalizedAction, normalizedParsed.pageType, seen);
-    const targetSelectors = (normalizedAction.targetIds || [])
+    const targetIds = resolveTargetIds(action, snapshot);
+    const targetSelectors = targetIds
       .map((id) => snapshot.interactives.find((interactive) => interactive.elementId === id)?.selector)
-      .filter(Boolean);
-    const fields = (normalizedAction.fields || []).map((field) => {
-      const node = snapshot.interactives.find((interactive) => interactive.elementId === field.elementId);
-      const enumValues = field.enumValues?.length ? field.enumValues : node?.options;
-      return {
-        field: field.field || field.elementId || 'field',
-        elementId: field.elementId,
-        selector: node?.selector,
-        label: field.label || node?.name || '',
-        controlType: mapControlType(field, node?.type),
-        required: Boolean(field.required),
-        options: node?.options,
-        enumValues,
-        optionSelectors: node?.optionSelectors,
-      };
-    });
-
-    actions.push({
-      action: actionName,
-      title: normalizedAction.title,
-      description: normalizedAction.description || '',
-      supported: normalizedAction.supported,
-      unsupportedReason: normalizedAction.unsupportedReason,
-      confidence: normalizedAction.confidence,
+      .filter((value): value is string => Boolean(value));
+    const normalizedAction = applyInferenceRiskRules({
+      action: action.action,
+      title: action.title,
+      description: action.description || '',
+      supported: action.supported,
+      unsupportedReason: action.unsupportedReason,
+      confidence: action.confidence,
       source: 'llm',
-      risk: normalizedAction.risk,
-      confirmation: normalizedAction.confirmation,
-      intent: normalizedAction.intent,
-      targetElementId: normalizedAction.targetIds[0],
+      risk: action.risk,
+      confirmation: action.confirmation,
+      intent: normalizeIntent(action.intent),
+      targetElementId: targetIds[0],
       targetSelectors,
       submitSelector: targetSelectors[0],
-      fields,
+      elementAttribute: snapshot.elementAttribute,
+      fields: (action.fields || []).map((field) => {
+        const node = snapshot.interactives.find((interactive) => interactive.elementId === field.elementId);
+        const enumValues = field.enumValues?.length ? field.enumValues : node?.options;
+        return {
+          field: field.field || field.elementId || 'field',
+          elementId: field.elementId,
+          selector: node?.selector,
+          label: field.label || node?.name || '',
+          controlType: mapControlType(field, node?.type),
+          required: Boolean(field.required),
+          options: node?.options,
+          enumValues,
+          optionSelectors: node?.optionSelectors,
+        };
+      }),
+      evidence: action.evidence,
+    }, snapshot);
+    if (isLowValueNavigationAction({ ...normalizedAction, evidence: action.evidence }, snapshot)) continue;
+
+    actions.push({
+      ...normalizedAction,
+      action: normalizeActionName(normalizedAction, normalizedParsed.pageType, seen),
     });
   }
 
@@ -639,7 +492,7 @@ async function inferWithLlm(snapshot, settings) {
     if (!candidate || candidate.itemCount < 2) continue;
 
     const itemRefField = inferItemReferenceField(rawCollection, candidate);
-    const collectionTemplates = [];
+    const collectionTemplates: BrowserCollection['actionTemplates'] = [];
     for (const template of rawCollection.actionTemplates || []) {
       const actionName = normalizeActionName({
         action: template.action,
@@ -669,6 +522,7 @@ async function inferWithLlm(snapshot, settings) {
         targetElementId: representative?.elementId,
         targetSelectors: representative?.selector ? [representative.selector] : [],
         submitSelector: representative?.selector,
+        elementAttribute: snapshot.elementAttribute,
         fields: [{
           field: itemRefField,
           elementId: candidate.containerId,
@@ -733,7 +587,7 @@ async function inferWithLlm(snapshot, settings) {
   };
 }
 
-function buildPlannerPrompt(command, catalog) {
+export function buildPlannerPrompt(command: string, catalog: BrowserActionCatalog): string {
   return `Map a user command to one discovered page action.
 Return EXACTLY one JSON object:
 {
@@ -763,199 +617,25 @@ ${JSON.stringify({
     action: action.action,
     title: action.title,
     description: action.description,
-      supported: action.supported !== false,
-      intent: action.intent,
-      risk: action.risk,
-      confirmation: action.confirmation,
-      unsupportedReason: action.unsupportedReason,
-      fields: (action.fields || []).map((field) => ({
-        field: field.field,
-        label: field.label,
-        controlType: field.controlType,
-        required: field.required,
-        enumValues: field.enumValues || field.options || [],
-      })),
-      collectionScope: action.collectionScope
-        ? {
-          collectionId: action.collectionScope.collectionId,
-          itemRefField: action.collectionScope.itemRefField,
-          itemTitles: (action.collectionScope.itemSummaries || []).map((item) => item.title),
-        }
-        : undefined,
+    supported: action.supported !== false,
+    intent: action.intent,
+    risk: action.risk,
+    confirmation: action.confirmation,
+    unsupportedReason: action.unsupportedReason,
+    fields: (action.fields || []).map((field) => ({
+      field: field.field,
+      label: field.label,
+      controlType: field.controlType,
+      required: field.required,
+      enumValues: field.enumValues || field.options || [],
     })),
-  }, null, 2)}`;
-}
-
-async function planCommand(command, catalog, settings) {
-  const baseUrl = (settings.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '');
-  const url = `${baseUrl}/chat/completions`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${settings.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: settings.model,
-      messages: [
-        {
-          role: 'system',
-          content: buildPlannerPrompt(command, catalog),
-        },
-        {
-          role: 'user',
-          content: command,
-        },
-      ],
-      response_format: { type: 'json_object' },
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Planner request failed (${response.status}): ${text}`);
-  }
-
-  const payload = await response.json();
-  const content = payload?.choices?.[0]?.message?.content;
-  if (!content) throw new Error('Planner response did not include message content.');
-  const parsed = JSON.parse(content);
-  if (!parsed || typeof parsed !== 'object') throw new Error('Planner returned invalid JSON.');
-  return {
-    action: typeof parsed.action === 'string' ? parsed.action : 'none',
-    args: parsed.args && typeof parsed.args === 'object' ? parsed.args : {},
-  };
-}
-
-async function discover() {
-  try {
-    setStatus('Inspecting current page...');
-    const tab = await getActiveTab();
-    await ensureContentScript(tab.id);
-    const settings = {
-      useLlm: useLlmEl.checked,
-      baseUrl: baseUrlEl.value.trim(),
-      apiKey: apiKeyEl.value.trim(),
-      model: modelEl.value.trim(),
-    };
-    await saveSettings();
-
-    if (settings.useLlm) {
-      if (!settings.apiKey || !settings.model) {
-        throw new Error('OpenAI API key and model are required for LLM inference.');
+    collectionScope: action.collectionScope
+      ? {
+        collectionId: action.collectionScope.collectionId,
+        itemRefField: action.collectionScope.itemRefField,
+        itemTitles: (action.collectionScope.itemSummaries || []).map((item) => item.title),
       }
-      setStatus('Collecting snapshot...');
-      const snapshot = await sendMessage(tab.id, { type: 'AAF_EXTENSION_GET_SNAPSHOT' });
-      if (snapshot?.error) throw new Error(snapshot.error);
-      lastSnapshot = snapshot;
-      setStatus('Calling LLM...');
-      const payload = await inferWithLlm(snapshot, settings);
-      renderActions(payload, 'llm');
-      setStatus(`Found ${payload.actions.length} action(s) with LLM inference.`);
-      return;
-    }
-
-    const payload = await sendMessage(tab.id, { type: 'AAF_EXTENSION_DISCOVER' });
-    if (payload?.error) throw new Error(payload.error);
-    lastSnapshot = payload.snapshot || null;
-    renderActions(payload, payload.discoveryMode || 'heuristic');
-    setStatus(`Found ${payload.actions.length} action(s) with ${payload.discoveryMode || 'heuristic'} discovery.`);
-  } catch (error) {
-    resultsEl.className = 'results empty';
-    resultsEl.textContent = '';
-    pageMetaEl.innerHTML = '';
-    setStatus(error instanceof Error ? error.message : String(error), true);
-  }
+      : undefined,
+  })),
+}, null, 2)}`;
 }
-
-async function copySnapshot() {
-  if (!lastSnapshot) {
-    setStatus('No snapshot available yet. Run discovery first.', true);
-    return;
-  }
-  await navigator.clipboard.writeText(JSON.stringify(lastSnapshot, null, 2));
-  setStatus('Snapshot copied to clipboard.');
-}
-
-async function runCommand() {
-  try {
-    const command = commandInputEl.value.trim();
-    if (!command) {
-      throw new Error('Enter a command first.');
-    }
-
-    const tab = await getActiveTab();
-    await ensureContentScript(tab.id);
-
-    const settings = {
-      useLlm: useLlmEl.checked,
-      baseUrl: baseUrlEl.value.trim(),
-      apiKey: apiKeyEl.value.trim(),
-      model: modelEl.value.trim(),
-    };
-    await saveSettings();
-
-    if (!settings.useLlm) {
-      throw new Error('Enable "Use OpenAI LLM inference" to run commands.');
-    }
-    if (!settings.apiKey || !settings.model) {
-      throw new Error('OpenAI API key and model are required to run commands.');
-    }
-
-    if (!lastCatalog || !Array.isArray(lastCatalog.actions) || !lastCatalog.actions.length) {
-      setStatus('Discovering actions first...');
-      await discover();
-    }
-    if (!lastCatalog || !lastCatalog.actions?.length) {
-      throw new Error('No discovered actions are available to plan against.');
-    }
-
-    setStatus('Planning command...');
-    const plan = await planCommand(command, lastCatalog, settings);
-    if (plan.action === 'none') {
-      throw new Error('The planner could not map that command to an available action.');
-    }
-
-    const selectedAction = lastCatalog.actions.find((action) => action.action === plan.action);
-    if (!selectedAction) {
-      throw new Error(`Planned action "${plan.action}" was not found in the current catalog.`);
-    }
-
-    setStatus(`Executing ${plan.action}...`);
-    const result = await sendMessage(tab.id, {
-      type: 'AAF_EXTENSION_EXECUTE',
-      action: selectedAction,
-      args: plan.args,
-    });
-    if (result?.error) {
-      throw new Error(result.error);
-    }
-
-    if (Array.isArray(result?.executionDetails) && result.executionDetails.length) {
-      setStatus(result.executionDetails.join(' | '));
-    } else {
-      setStatus(result?.status === 'completed' ? `Completed ${plan.action}.` : `Finished ${plan.action}.`);
-    }
-
-    await discover();
-  } catch (error) {
-    setStatus(error instanceof Error ? error.message : String(error), true);
-  }
-}
-
-discoverButton.addEventListener('click', discover);
-copySnapshotButton.addEventListener('click', copySnapshot);
-runCommandButton.addEventListener('click', runCommand);
-commandInputEl.addEventListener('keydown', (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-    runCommand();
-  }
-});
-useLlmEl.addEventListener('change', saveSettings);
-baseUrlEl.addEventListener('change', saveSettings);
-apiKeyEl.addEventListener('change', saveSettings);
-modelEl.addEventListener('change', saveSettings);
-
-loadSettings().then(discover).catch((error) => {
-  setStatus(error instanceof Error ? error.message : String(error), true);
-});

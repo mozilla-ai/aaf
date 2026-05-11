@@ -9,6 +9,18 @@ What it does:
 - otherwise falls back to heuristic discovery for common forms and visible controls
 - optionally sends the page snapshot to OpenAI to infer richer actions
 - can take a plain-text command, ask the LLM to map it to a discovered action, and execute it on the current page
+- now consumes the internal `@agent-accessibility-framework/browser-actions` package for the inferred-action core
+
+## Build It
+
+Before loading the extension in Chrome:
+
+1. Run `npm run build:extension-demo`
+
+This produces:
+
+- `extension_demo/build/popup.js`
+- `extension_demo/build/content-script.js`
 
 ## Load It In Chrome
 
@@ -71,3 +83,4 @@ The extension will:
 - It now supports basic command planning and execution, but only for the current page
 - The local fallback is heuristic and intentionally simple
 - The LLM mode is closer to the repo's inferred-action direction, but still lightweight and extension-friendly
+- The heuristic fallback remains extension-local; only the inferred-action core was extracted into the shared package
