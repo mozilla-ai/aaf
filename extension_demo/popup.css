@@ -16,6 +16,38 @@ body {
   gap: 12px;
 }
 
+.tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.tabButton {
+  border-radius: 12px;
+  border: 1px solid rgba(29, 78, 95, 0.18);
+  background: rgba(255, 255, 255, 0.72);
+  color: #355061;
+  padding: 8px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.tabButton.active {
+  background: #1d4e5f;
+  color: #fff;
+  border-color: #1d4e5f;
+}
+
+.view {
+  display: none;
+  gap: 12px;
+}
+
+.view.active {
+  display: grid;
+}
+
 .header {
   display: flex;
   align-items: flex-start;
@@ -209,6 +241,65 @@ textarea {
   margin-top: 3px;
   color: #5c6670;
   line-height: 1.4;
+}
+
+.taskTitle {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.taskSubtitle {
+  color: #5f6c7a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.taskLogs {
+  display: grid;
+  gap: 8px;
+  max-height: 460px;
+  overflow: auto;
+}
+
+.taskLogs.empty {
+  color: #6d7781;
+  font-size: 13px;
+}
+
+.taskLog {
+  border: 1px solid rgba(29, 78, 95, 0.14);
+  border-radius: 12px;
+  padding: 10px;
+  background: #fcfcfa;
+}
+
+.taskLogHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.taskLogKind {
+  font-size: 11px;
+  font-weight: 700;
+  color: #355061;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.taskLogTime {
+  font-size: 11px;
+  color: #75818c;
+}
+
+.taskLogMessage {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #2f3d48;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .error {

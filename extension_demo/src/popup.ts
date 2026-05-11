@@ -9,9 +9,17 @@ import {
 const discoverButton = document.getElementById('discoverButton') as HTMLButtonElement;
 const copySnapshotButton = document.getElementById('copySnapshotButton') as HTMLButtonElement;
 const runCommandButton = document.getElementById('runCommandButton') as HTMLButtonElement;
+const clearTaskButton = document.getElementById('clearTaskButton') as HTMLButtonElement;
+const discoverTabButton = document.getElementById('discoverTabButton') as HTMLButtonElement;
+const taskTabButton = document.getElementById('taskTabButton') as HTMLButtonElement;
+const discoverViewEl = document.getElementById('discoverView') as HTMLDivElement;
+const taskViewEl = document.getElementById('taskView') as HTMLDivElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 const pageMetaEl = document.getElementById('pageMeta') as HTMLDivElement;
 const resultsEl = document.getElementById('results') as HTMLDivElement;
+const taskTitleEl = document.getElementById('taskTitle') as HTMLDivElement;
+const taskSubtitleEl = document.getElementById('taskSubtitle') as HTMLDivElement;
+const taskLogsEl = document.getElementById('taskLogs') as HTMLDivElement;
 const useLlmEl = document.getElementById('useLlm') as HTMLInputElement;
 const baseUrlEl = document.getElementById('baseUrl') as HTMLInputElement;
 const apiKeyEl = document.getElementById('apiKey') as HTMLInputElement;
@@ -20,6 +28,8 @@ const commandInputEl = document.getElementById('commandInput') as HTMLTextAreaEl
 
 let lastSnapshot: BrowserDiscoverySnapshot | null = null;
 let lastCatalog: BrowserActionCatalog | null = null;
+let activeView: 'discover' | 'task' = 'discover';
+let taskLogCount = 0;
 
 const STORAGE_KEY = 'aaf_extension_demo_settings';
 
@@ -35,6 +45,61 @@ function escapeHtml(value: unknown) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function switchView(view: 'discover' | 'task') {
+  activeView = view;
+  discoverTabButton.classList.toggle('active', view === 'discover');
+  taskTabButton.classList.toggle('active', view === 'task');
+  discoverViewEl.classList.toggle('active', view === 'discover');
+  taskViewEl.classList.toggle('active', view === 'task');
+}
+
+function clearTaskView(reason = 'Run a command to see planning and execution logs here.') {
+  taskLogCount = 0;
+  taskTitleEl.textContent = 'No active task.';
+  taskSubtitleEl.textContent = reason;
+  taskLogsEl.className = 'taskLogs empty';
+  taskLogsEl.textContent = 'No task logs yet.';
+}
+
+function startTaskView(command: string) {
+  taskLogCount = 0;
+  taskTitleEl.textContent = command;
+  taskSubtitleEl.textContent = 'Planning and execution logs for the current command.';
+  taskLogsEl.className = 'taskLogs';
+  taskLogsEl.innerHTML = '';
+  switchView('task');
+}
+
+function appendTaskLog(kind: 'plan' | 'act' | 'status' | 'error', message: string) {
+  if (taskLogCount === 0) {
+    taskLogsEl.className = 'taskLogs';
+    taskLogsEl.innerHTML = '';
+  }
+  taskLogCount += 1;
+  const card = document.createElement('article');
+  card.className = 'taskLog';
+
+  const header = document.createElement('div');
+  header.className = 'taskLogHeader';
+
+  const kindEl = document.createElement('div');
+  kindEl.className = `taskLogKind${kind === 'error' ? ' error' : ''}`;
+  kindEl.textContent = kind;
+
+  const timeEl = document.createElement('div');
+  timeEl.className = 'taskLogTime';
+  timeEl.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  const messageEl = document.createElement('div');
+  messageEl.className = `taskLogMessage${kind === 'error' ? ' error' : ''}`;
+  messageEl.textContent = message;
+
+  header.append(kindEl, timeEl);
+  card.append(header, messageEl);
+  taskLogsEl.appendChild(card);
+  taskLogsEl.scrollTop = taskLogsEl.scrollHeight;
 }
 
 function renderMeta(payload: BrowserActionCatalog | null, sourceLabel: string) {
@@ -226,8 +291,11 @@ async function planCommand(command: string, catalog: BrowserActionCatalog, setti
   };
 }
 
-async function discover() {
+async function discover(options: { preserveTaskView?: boolean } = {}) {
   try {
+    if (!options.preserveTaskView) {
+      clearTaskView('Run a command to see planning and execution logs here.');
+    }
     setStatus('Inspecting current page...');
     const tab = await getActiveTab();
     await ensureContentScript(tab.id);
@@ -282,6 +350,8 @@ async function runCommand() {
     if (!command) {
       throw new Error('Enter a command first.');
     }
+    startTaskView(command);
+    appendTaskLog('plan', `Starting task: ${command}`);
 
     const tab = await getActiveTab();
     await ensureContentScript(tab.id);
@@ -295,49 +365,69 @@ async function runCommand() {
     await saveSettings();
 
     if (!settings.useLlm) {
+      appendTaskLog('error', 'Enable "Use OpenAI LLM inference" to run commands.');
       throw new Error('Enable "Use OpenAI LLM inference" to run commands.');
     }
     if (!settings.apiKey || !settings.model) {
+      appendTaskLog('error', 'OpenAI API key and model are required to run commands.');
       throw new Error('OpenAI API key and model are required to run commands.');
     }
 
     if (!lastCatalog || !Array.isArray(lastCatalog.actions) || !lastCatalog.actions.length) {
       setStatus('Discovering actions first...');
-      await discover();
+      appendTaskLog('plan', 'No current action catalog; discovering actions first.');
+      await discover({ preserveTaskView: true });
     }
     if (!lastCatalog || !lastCatalog.actions?.length) {
+      appendTaskLog('error', 'No discovered actions are available to plan against.');
       throw new Error('No discovered actions are available to plan against.');
     }
 
     setStatus('Planning command...');
+    appendTaskLog('plan', 'Asking the model to map the command to one discovered action.');
     const plan = await planCommand(command, lastCatalog, settings);
     if (plan.action === 'none') {
+      appendTaskLog('error', 'The planner could not map that command to an available action.');
       throw new Error('The planner could not map that command to an available action.');
     }
+    appendTaskLog('plan', `Planned ${plan.action}\nargs: ${JSON.stringify(plan.args)}`);
 
     const selectedAction = lastCatalog.actions.find((action) => action.action === plan.action);
     if (!selectedAction) {
+      appendTaskLog('error', `Planned action "${plan.action}" was not found in the current catalog.`);
       throw new Error(`Planned action "${plan.action}" was not found in the current catalog.`);
     }
 
     setStatus(`Executing ${plan.action}...`);
+    appendTaskLog('act', `Executing ${plan.action}`);
     const result = await sendMessage<{ error?: string; status?: string; executionDetails?: string[] }>(tab.id, {
       type: 'AAF_EXTENSION_EXECUTE',
       action: selectedAction,
       args: plan.args,
     });
     if (result?.error) {
+      appendTaskLog('error', result.error);
       throw new Error(result.error);
     }
 
     if (Array.isArray(result?.executionDetails) && result.executionDetails.length) {
+      for (const detail of result.executionDetails) {
+        appendTaskLog('act', detail);
+      }
       setStatus(result.executionDetails.join(' | '));
     } else {
       setStatus(result?.status === 'completed' ? `Completed ${plan.action}.` : `Finished ${plan.action}.`);
     }
+    appendTaskLog('status', result?.status === 'completed'
+      ? `Completed ${plan.action}.`
+      : result?.status
+        ? `Finished ${plan.action} with status ${result.status}.`
+        : `Finished ${plan.action}.`);
 
-    await discover();
+    appendTaskLog('status', 'Refreshing discovered actions for the current page state.');
+    await discover({ preserveTaskView: true });
   } catch (error) {
+    appendTaskLog('error', error instanceof Error ? error.message : String(error));
     setStatus(error instanceof Error ? error.message : String(error), true);
   }
 }
@@ -345,6 +435,9 @@ async function runCommand() {
 discoverButton.addEventListener('click', discover);
 copySnapshotButton.addEventListener('click', copySnapshot);
 runCommandButton.addEventListener('click', runCommand);
+clearTaskButton.addEventListener('click', () => clearTaskView());
+discoverTabButton.addEventListener('click', () => switchView('discover'));
+taskTabButton.addEventListener('click', () => switchView('task'));
 commandInputEl.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
     runCommand();
@@ -355,6 +448,7 @@ baseUrlEl.addEventListener('change', saveSettings);
 apiKeyEl.addEventListener('change', saveSettings);
 modelEl.addEventListener('change', saveSettings);
 
+clearTaskView();
 loadSettings().then(discover).catch((error) => {
   setStatus(error instanceof Error ? error.message : String(error), true);
 });
