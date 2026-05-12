@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import type { LlmBackend } from '@agent-accessibility-framework/planner-local';
 import {
   SemanticParser,
   ManifestValidator,
@@ -13,7 +14,10 @@ import {
   type AAFValidationResult,
   type ExecuteOptions,
   type ExecutionResult,
+  type DiscoveredAction,
 } from '@agent-accessibility-framework/runtime-core';
+import { InferredActionDiscoverer } from './inferred-action-discoverer.js';
+import { InferredActionExecutor, canPartiallyExecute, type ResolvedInferredAction } from './inferred-action-executor.js';
 
 export interface ExecuteActionOptions {
   actionName: string;
@@ -21,6 +25,13 @@ export interface ExecuteActionOptions {
   confirmed?: boolean;
   baseUrl: string;
   manifest: AgentManifest;
+}
+
+export interface PlaywrightAdapterOptions {
+  llmBackend?: LlmBackend;
+  discoveryMode?: 'aaf-preferred' | 'inferred-only';
+  allowInferredExecution?: boolean;
+  maxInteractiveNodes?: number;
 }
 
 export class ActionExecutor {
@@ -193,104 +204,147 @@ export class ActionExecutor {
 export class PlaywrightAdapter implements AAFAdapter {
   private page: Page;
   private baseUrl: string;
-  private manifest: AgentManifest;
+  private manifest?: AgentManifest;
   private parser = new SemanticParser();
   private validator = new ManifestValidator();
   private policy = new PolicyEngine();
   private executor = new ActionExecutor();
+  private inferredExecutor = new InferredActionExecutor();
+  private llmBackend?: LlmBackend;
+  private discoveryMode: 'aaf-preferred' | 'inferred-only';
+  private allowInferredExecution: boolean;
+  private maxInteractiveNodes: number;
+  private lastCatalog?: ActionCatalog;
+  private inferredExecutionMap = new Map<string, ResolvedInferredAction>();
 
-  constructor(page: Page, baseUrl: string, manifest: AgentManifest) {
+  constructor(page: Page, baseUrl: string, manifest?: AgentManifest, options?: PlaywrightAdapterOptions) {
     this.page = page;
     this.baseUrl = baseUrl;
     this.manifest = manifest;
+    this.llmBackend = options?.llmBackend;
+    this.discoveryMode = options?.discoveryMode || 'aaf-preferred';
+    this.allowInferredExecution = options?.allowInferredExecution ?? true;
+    this.maxInteractiveNodes = options?.maxInteractiveNodes ?? 150;
   }
 
   async detect(): Promise<boolean> {
-    return this.page.evaluate(() => {
-      return document.querySelectorAll('[data-agent-kind]').length > 0;
-    });
+    const hasAaf = await this.page.evaluate(() => document.querySelectorAll('[data-agent-kind]').length > 0);
+    if (hasAaf && this.discoveryMode !== 'inferred-only') return true;
+    if (!this.llmBackend) return false;
+    const catalog = await this.discover();
+    return catalog.actions.length > 0;
   }
 
   async discover(): Promise<ActionCatalog> {
-    const actions = await this.page.evaluate(() => {
-      const actionEls = document.querySelectorAll('[data-agent-kind="action"][data-agent-action]');
-      const results: Array<{
-        action: string;
-        kind: string;
-        danger?: string;
-        confirm?: string;
-        scope?: string;
-        idempotent?: string;
-        fields: Array<{ field: string; tagName: string; forAction?: string }>;
-        statuses: Array<{ output: string; tagName: string }>;
-        submitAction?: string;
-      }> = [];
-      const seen = new Set<string>();
+    const hasAaf = await this.page.evaluate(() => document.querySelectorAll('[data-agent-kind]').length > 0);
+    if (hasAaf && this.discoveryMode !== 'inferred-only') {
+      const actions = await this.page.evaluate(() => {
+        const actionEls = document.querySelectorAll('[data-agent-kind="action"][data-agent-action]');
+        const results: Array<{
+          action: string;
+          kind: 'action';
+          danger?: string;
+          confirm?: string;
+          scope?: string;
+          idempotent?: string;
+          fields: Array<{ field: string; tagName: string; forAction?: string }>;
+          statuses: Array<{ output: string; tagName: string }>;
+          submitAction?: string;
+          source: 'aaf';
+        }> = [];
+        const seen = new Set<string>();
 
-      actionEls.forEach((el) => {
-        const name = el.getAttribute('data-agent-action')!;
-        if (name.split('.').length > 2 || seen.has(name)) return;
-        seen.add(name);
+        actionEls.forEach((el) => {
+          const name = el.getAttribute('data-agent-action')!;
+          if (name.split('.').length > 2 || seen.has(name)) return;
+          seen.add(name);
 
-        const fields: Array<{ field: string; tagName: string; forAction?: string }> = [];
-        el.querySelectorAll('[data-agent-kind="field"]').forEach((f) => {
-          fields.push({
-            field: f.getAttribute('data-agent-field')!,
-            tagName: f.tagName.toLowerCase(),
-          });
-        });
-        document.querySelectorAll(`[data-agent-kind="field"][data-agent-for-action="${name}"]`).forEach((f) => {
-          const fieldName = f.getAttribute('data-agent-field')!;
-          if (!fields.some((x) => x.field === fieldName)) {
+          const fields: Array<{ field: string; tagName: string; forAction?: string }> = [];
+          el.querySelectorAll('[data-agent-kind="field"]').forEach((f) => {
             fields.push({
-              field: fieldName,
+              field: f.getAttribute('data-agent-field')!,
               tagName: f.tagName.toLowerCase(),
-              forAction: name,
             });
-          }
-        });
+          });
+          document.querySelectorAll(`[data-agent-kind="field"][data-agent-for-action="${name}"]`).forEach((f) => {
+            const fieldName = f.getAttribute('data-agent-field')!;
+            if (!fields.some((x) => x.field === fieldName)) {
+              fields.push({
+                field: fieldName,
+                tagName: f.tagName.toLowerCase(),
+                forAction: name,
+              });
+            }
+          });
 
-        const statuses: Array<{ output: string; tagName: string }> = [];
-        el.querySelectorAll('[data-agent-kind="status"]').forEach((s) => {
-          statuses.push({
-            output: s.getAttribute('data-agent-output')!,
-            tagName: s.tagName.toLowerCase(),
+          const statuses: Array<{ output: string; tagName: string }> = [];
+          el.querySelectorAll('[data-agent-kind="status"]').forEach((s) => {
+            statuses.push({
+              output: s.getAttribute('data-agent-output')!,
+              tagName: s.tagName.toLowerCase(),
+            });
+          });
+
+          let submitAction: string | undefined;
+          el.querySelectorAll('[data-agent-kind="action"]').forEach((sub) => {
+            const subAction = sub.getAttribute('data-agent-action');
+            if (subAction && subAction.startsWith(name + '.')) {
+              submitAction = subAction;
+            }
+          });
+
+          results.push({
+            action: name,
+            kind: 'action',
+            danger: el.getAttribute('data-agent-danger') ?? undefined,
+            confirm: el.getAttribute('data-agent-confirm') ?? undefined,
+            scope: el.getAttribute('data-agent-scope') ?? undefined,
+            idempotent: el.getAttribute('data-agent-idempotent') ?? undefined,
+            fields,
+            statuses,
+            submitAction,
+            source: 'aaf',
           });
         });
 
-        let submitAction: string | undefined;
-        el.querySelectorAll('[data-agent-kind="action"]').forEach((sub) => {
-          const subAction = sub.getAttribute('data-agent-action');
-          if (subAction && subAction.startsWith(name + '.')) {
-            submitAction = subAction;
-          }
-        });
-
-        results.push({
-          action: name,
-          kind: 'action',
-          danger: el.getAttribute('data-agent-danger') ?? undefined,
-          confirm: el.getAttribute('data-agent-confirm') ?? undefined,
-          scope: el.getAttribute('data-agent-scope') ?? undefined,
-          idempotent: el.getAttribute('data-agent-idempotent') ?? undefined,
-          fields,
-          statuses,
-          submitAction,
-        });
+        return results;
       });
 
-      return results;
-    });
+      const catalog = {
+        actions,
+        url: this.page.url(),
+        timestamp: new Date().toISOString(),
+        discoveryMode: 'aaf' as const,
+      };
+      this.lastCatalog = catalog;
+      this.inferredExecutionMap.clear();
+      return catalog;
+    }
 
-    return {
-      actions,
-      url: this.page.url(),
-      timestamp: new Date().toISOString(),
-    };
+    if (!this.llmBackend) {
+      const empty = { actions: [], url: this.page.url(), timestamp: new Date().toISOString() };
+      this.lastCatalog = empty;
+      this.inferredExecutionMap.clear();
+      return empty;
+    }
+
+    const discoverer = new InferredActionDiscoverer(this.page, this.llmBackend, this.maxInteractiveNodes);
+    const inferred = await discoverer.discover();
+    this.lastCatalog = inferred.catalog;
+    this.inferredExecutionMap = inferred.resolvedActions;
+    return inferred.catalog;
   }
 
   validate(actionName: string, args: Record<string, unknown>, manifest?: AgentManifest): AAFValidationResult {
+    const catalogAction = this.lastCatalog?.actions.find((action) => action.action === actionName);
+    if (catalogAction?.source === 'inferred') {
+      return this.validateInferred(catalogAction, args);
+    }
+
     const m = manifest || this.manifest;
+    if (!m) {
+      return { valid: false, errors: [`No manifest available for action "${actionName}"`] };
+    }
     try {
       const action = this.validator.getAction(m, actionName);
       const result = this.validator.validateInput(action, args);
@@ -316,8 +370,38 @@ export class PlaywrightAdapter implements AAFAdapter {
   async execute(options: ExecuteOptions): Promise<ExecutionResult> {
     const { actionName, args, confirmed } = options;
     const manifest = options.manifest || this.manifest;
+    if (!this.lastCatalog) {
+      await this.discover();
+    }
+
+    const catalogAction = this.lastCatalog?.actions.find((action) => action.action === actionName);
+    if (catalogAction?.source === 'inferred') {
+      if (!this.allowInferredExecution) {
+        return { status: 'execution_error', error: 'Inferred action execution is disabled' };
+      }
+      const validation = this.validate(actionName, args);
+      if (!validation.valid) {
+        if (validation.missing_fields?.length) {
+          return { status: 'missing_required_fields', missing_fields: validation.missing_fields, error: validation.errors.join(', ') };
+        }
+        return { status: 'validation_error', error: validation.errors.join(', ') };
+      }
+      const resolved = this.inferredExecutionMap.get(actionName);
+      if (!resolved) {
+        return { status: 'execution_error', error: `Inferred action "${actionName}" is not available` };
+      }
+      const result = await this.inferredExecutor.execute(this.page, resolved, args);
+      if (this.lastCatalog?.discoveryMode === 'inferred'
+        && (result.status === 'completed' || result.status === 'awaiting_review')) {
+        await this.discover();
+      }
+      return result;
+    }
 
     try {
+      if (!manifest) {
+        return { status: 'execution_error', error: `No manifest available for action "${actionName}"` };
+      }
       const action = this.validator.getAction(manifest, actionName);
 
       // Coerce args before policy/validation
@@ -380,5 +464,66 @@ export class PlaywrightAdapter implements AAFAdapter {
     } catch (err) {
       return { status: 'execution_error', error: (err as Error).message };
     }
+  }
+
+  private validateInferred(action: DiscoveredAction, args: Record<string, unknown>): AAFValidationResult {
+    const resolved = this.inferredExecutionMap.get(action.action);
+    if (action.supported === false && !(resolved && canPartiallyExecute(resolved))) {
+      return { valid: false, errors: [this.describeUnsupportedInferredAction(action)] };
+    }
+
+    const fieldMap = new Map(action.fields.map((field) => [field.field, field]));
+    const extraFields = Object.keys(args).filter((key) => !fieldMap.has(key));
+    if (extraFields.length > 0) {
+      return { valid: false, errors: [`Unknown fields: ${extraFields.join(', ')}`] };
+    }
+
+    const missing = action.fields
+      .filter((field) => field.required && (args[field.field] === undefined || args[field.field] === ''))
+      .map((field) => field.field);
+    if (missing.length > 0) {
+      return { valid: false, errors: [`Missing required fields: ${missing.join(', ')}`], missing_fields: missing };
+    }
+
+    for (const field of action.fields) {
+      const value = args[field.field];
+      if (value === undefined) continue;
+      if (field.enumValues?.length && !field.enumValues.includes(String(value))) {
+        return { valid: false, errors: [`Field "${field.field}" must be one of: ${field.enumValues.join(', ')}`] };
+      }
+      if ((field.schemaType === 'number' || field.controlType === 'number') && Number.isNaN(Number(value))) {
+        return { valid: false, errors: [`Field "${field.field}" must be a number`] };
+      }
+      if ((field.format === 'email' || field.controlType === 'email') && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value))) {
+        return { valid: false, errors: [`Field "${field.field}" must be an email`] };
+      }
+      if (field.controlType === 'radio-group' && typeof value !== 'string') {
+        return { valid: false, errors: [`Field "${field.field}" must be a string`] };
+      }
+      if ((field.controlType === 'checkbox' || field.controlType === 'radio') && typeof value !== 'boolean' && typeof value !== 'string') {
+        return { valid: false, errors: [`Field "${field.field}" must be a boolean or string`] };
+      }
+    }
+
+    return { valid: true, errors: [] };
+  }
+
+  private describeUnsupportedInferredAction(action: DiscoveredAction): string {
+    const reason = action.unsupportedReason?.trim();
+    if (reason) return reason;
+
+    if (action.risk === 'high' || action.danger === 'high') {
+      return 'This inferred action is blocked because it appears high-risk.';
+    }
+
+    if (action.intent === 'search' || action.intent === 'submit' || action.intent === 'authenticate') {
+      return 'This inferred form action is blocked because the submit target could not be grounded confidently.';
+    }
+
+    if (action.intent === 'toggle') {
+      return 'This inferred toggle action is blocked because the target control could not be grounded confidently.';
+    }
+
+    return 'This inferred action is blocked because the target could not be grounded confidently.';
   }
 }

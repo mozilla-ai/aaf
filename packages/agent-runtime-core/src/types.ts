@@ -74,6 +74,19 @@ export interface DiscoveredAction {
   description?: string;
   /** True when the manifest schema sets additionalProperties: false. */
   strictFields?: boolean;
+  source?: 'aaf' | 'inferred';
+  risk?: 'none' | 'low' | 'high';
+  confirmation?: 'never' | 'optional' | 'review' | 'required';
+  intent?: 'navigate' | 'search' | 'authenticate' | 'create' | 'update' | 'delete' | 'filter' | 'sort' | 'toggle' | 'submit' | 'open' | 'close' | 'download' | 'unknown';
+  confidence?: number;
+  supported?: boolean;
+  unsupportedReason?: string;
+  siteType?: string;
+  pageType?: string;
+  evidence?: Array<{
+    kind: 'role' | 'name' | 'label' | 'heading' | 'landmark' | 'url' | 'text';
+    value: string;
+  }>;
 }
 
 export interface DiscoveredField {
@@ -90,6 +103,8 @@ export interface DiscoveredField {
   enumValues?: string[];
   /** Format hint from the manifest schema (e.g. "email"). */
   format?: string;
+  label?: string;
+  controlType?: 'text' | 'email' | 'password' | 'search' | 'number' | 'date' | 'url' | 'select' | 'checkbox' | 'radio' | 'radio-group' | 'textarea' | 'unknown';
 }
 
 export interface DiscoveredStatus {
@@ -101,6 +116,36 @@ export interface DiscoveredLink {
   page: string;
   tagName: string;
   textContent?: string;
+}
+
+export interface DiscoveredCollectionItem {
+  itemId: string;
+  title?: string;
+  summary: string;
+  keyFields?: Record<string, string>;
+  actionIds?: string[];
+}
+
+export interface DiscoveredCollectionActionTemplate {
+  action: string;
+  title: string;
+  description?: string;
+  intent?: DiscoveredAction['intent'];
+  targetRole?: string;
+  targetName?: string;
+  confidence?: number;
+  supported?: boolean;
+  unsupportedReason?: string;
+}
+
+export interface DiscoveredCollection {
+  collectionId: string;
+  title: string;
+  description?: string;
+  confidence: number;
+  itemKeyFields: string[];
+  items: DiscoveredCollectionItem[];
+  actionTemplates: DiscoveredCollectionActionTemplate[];
 }
 
 export type LogStepType = 'navigate' | 'fill' | 'click' | 'read_status' | 'validate' | 'policy_check' | 'coerce';
@@ -134,8 +179,16 @@ export interface PolicyCheckResult {
 
 export interface ActionCatalog {
   actions: DiscoveredAction[];
+  collections?: DiscoveredCollection[];
   url: string;
   timestamp: string;
+  discoveryMode?: 'aaf' | 'inferred';
+  pageContext?: {
+    siteType: string;
+    pageType: string;
+    summary: string;
+    confidence: number;
+  };
 }
 
 export interface AAFValidationResult {
@@ -155,6 +208,7 @@ export interface ExecutionResult {
   status: 'completed' | 'awaiting_review' | 'needs_confirmation' | 'validation_error' | 'execution_error' | 'missing_required_fields';
   result?: string;
   log?: ExecutionLog;
+  execution_details?: string[];
   confirmation_metadata?: {
     action: string;
     risk: string;
@@ -175,7 +229,7 @@ export interface AAFAdapter {
   /** Discover all available actions on the current page */
   discover(): Promise<ActionCatalog>;
   /** Validate an action request against manifest schema */
-  validate(actionName: string, args: Record<string, unknown>, manifest: AgentManifest): AAFValidationResult;
+  validate(actionName: string, args: Record<string, unknown>, manifest?: AgentManifest): AAFValidationResult;
   /** Execute an action on the page */
   execute(options: ExecuteOptions): Promise<ExecutionResult>;
 }

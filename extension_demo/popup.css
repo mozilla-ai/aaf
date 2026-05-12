@@ -1,0 +1,307 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: linear-gradient(180deg, #f6f4ef 0%, #ece7dc 100%);
+  color: #1f2933;
+  width: 420px;
+}
+
+.app {
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.tabButton {
+  border-radius: 12px;
+  border: 1px solid rgba(29, 78, 95, 0.18);
+  background: rgba(255, 255, 255, 0.72);
+  color: #355061;
+  padding: 8px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.tabButton.active {
+  background: #1d4e5f;
+  color: #fff;
+  border-color: #1d4e5f;
+}
+
+.view {
+  display: none;
+  gap: 12px;
+}
+
+.view.active {
+  display: grid;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.header p {
+  margin: 4px 0 0;
+  color: #5f6c7a;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(38, 56, 73, 0.12);
+  border-radius: 14px;
+  padding: 12px;
+  box-shadow: 0 8px 18px rgba(31, 41, 51, 0.06);
+}
+
+.meta {
+  display: grid;
+  gap: 6px;
+}
+
+.primary,
+.ghost {
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+.primary {
+  background: #1d4e5f;
+  color: #fff;
+  padding: 9px 14px;
+}
+
+.primary.compact {
+  padding: 6px 10px;
+}
+
+.ghost {
+  background: transparent;
+  border-color: rgba(29, 78, 95, 0.18);
+  color: #1d4e5f;
+  padding: 6px 10px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+details summary {
+  cursor: pointer;
+  color: #405261;
+  font-size: 12px;
+  margin-top: 10px;
+}
+
+.settings {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.settings label {
+  display: grid;
+  gap: 4px;
+}
+
+.settings span {
+  font-size: 12px;
+  color: #5f6c7a;
+}
+
+input[type="text"],
+input[type="url"],
+input[type="password"],
+textarea {
+  width: 100%;
+  border: 1px solid rgba(38, 56, 73, 0.16);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font: inherit;
+  background: #fff;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 72px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sectionHeader h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.results {
+  display: grid;
+  gap: 10px;
+  max-height: 460px;
+  overflow: auto;
+}
+
+.results.empty {
+  color: #6d7781;
+  font-size: 13px;
+}
+
+.actionCard {
+  border: 1px solid rgba(29, 78, 95, 0.14);
+  border-radius: 12px;
+  padding: 10px;
+  background: #fcfcfa;
+}
+
+.actionHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.actionName {
+  font-weight: 700;
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.pillRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.pill {
+  border-radius: 999px;
+  background: #e7eef1;
+  color: #355061;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.actionSummary {
+  margin-top: 6px;
+  color: #5f6c7a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.fieldList {
+  margin-top: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.field {
+  padding: 8px;
+  border-radius: 10px;
+  background: #f3f5f6;
+  font-size: 12px;
+}
+
+.fieldName {
+  font-weight: 700;
+}
+
+.fieldOptions {
+  margin-top: 3px;
+  color: #5c6670;
+  line-height: 1.4;
+}
+
+.taskTitle {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.taskSubtitle {
+  color: #5f6c7a;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.taskLogs {
+  display: grid;
+  gap: 8px;
+  max-height: 460px;
+  overflow: auto;
+}
+
+.taskLogs.empty {
+  color: #6d7781;
+  font-size: 13px;
+}
+
+.taskLog {
+  border: 1px solid rgba(29, 78, 95, 0.14);
+  border-radius: 12px;
+  padding: 10px;
+  background: #fcfcfa;
+}
+
+.taskLogHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.taskLogKind {
+  font-size: 11px;
+  font-weight: 700;
+  color: #355061;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.taskLogTime {
+  font-size: 11px;
+  color: #75818c;
+}
+
+.taskLogMessage {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #2f3d48;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.error {
+  color: #a12f2f;
+}

@@ -28,13 +28,16 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test --config packages/agent-runtime-playwright/playwright.config.ts",
-    "benchmark": "npx tsx tests/falsification/generate-report.ts"
+    "benchmark": "npx tsx tests/falsification/generate-report.ts",
+    "build:extension-demo": "npx vite build --config extension_demo/vite.config.ts --mode popup && npx vite build --config extension_demo/vite.config.ts --mode content-script",
+    "dev:extension-demo": "sh -c 'npx vite build --watch --config extension_demo/vite.config.ts --mode popup & npx vite build --watch --config extension_demo/vite.config.ts --mode content-script & wait'"
   },
   "devDependencies": {
     "ajv": "^8.17.0",
     "ajv-formats": "^3.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
+    "vite": "^6.0.0",
     "vitest": "^3.0.0"
   },
   "dependencies": {

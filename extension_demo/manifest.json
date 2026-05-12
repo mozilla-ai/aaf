@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "AAF Action Discovery Demo",
+  "version": "0.1.0",
+  "description": "Inspect the current page and list explicit or inferred actions available to an agent.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_title": "AAF Action Discovery",
+    "default_popup": "popup.html"
+  }
+}
