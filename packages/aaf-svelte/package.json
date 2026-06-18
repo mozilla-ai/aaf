@@ -12,7 +12,7 @@
     "svelte": "^4.0.0 || ^5.0.0"
   },
   "devDependencies": {
-    "svelte": "^5.0.0",
+    "svelte": "^5.55.7",
     "@testing-library/svelte": "^5.0.0",
     "jsdom": "^28.1.0"
   }
