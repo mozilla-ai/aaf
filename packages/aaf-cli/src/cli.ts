@@ -52,17 +52,7 @@ async function navigateTo(page: Page, url: string) {
 async function discoverActions(page: Page): Promise<ActionCatalog> {
   const actions = await page.evaluate(() => {
     const actionEls = document.querySelectorAll('[data-agent-kind="action"][data-agent-action]');
-    const results: Array<{
-      action: string;
-      kind: string;
-      danger?: string;
-      confirm?: string;
-      scope?: string;
-      idempotent?: string;
-      fields: Array<{ field: string; tagName: string; forAction?: string }>;
-      statuses: Array<{ output: string; tagName: string }>;
-      submitAction?: string;
-    }> = [];
+    const results: DiscoveredAction[] = [];
     const seen = new Set<string>();
 
     actionEls.forEach((el) => {
@@ -119,7 +109,8 @@ async function executeAction(
   actionName: string,
   args: Record<string, unknown>,
   discovered: DiscoveredAction,
-): Promise<{ status: string; result?: string; error?: string }> {
+  confirmSubmit?: () => Promise<boolean>,
+) {
   // Fill fields
   for (const field of discovered.fields) {
     const value = args[field.field];
@@ -156,6 +147,10 @@ async function executeAction(
       await page.fill(selector, String(value));
       log('fill', `${field.field} = "${value}"`);
     }
+  }
+
+  if (confirmSubmit && !(await confirmSubmit())) {
+    return { status: 'cancelled' };
   }
 
   // Click submit
@@ -274,61 +269,47 @@ async function main() {
     let catalog = await discoverActions(page);
     printCatalog(catalog);
 
-    if (command) {
-      // ─── One-shot mode ────────────────────────────────────────────
-      await runCommand(command, catalog, planner, manifest, page, baseUrl);
-    } else {
-      // ─── Interactive REPL ─────────────────────────────────────────
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const lines = rl[Symbol.asyncIterator]();
+    async function readLine(prompt: string) {
+      process.stdout.write(prompt);
+      const line = await lines.next();
+      return line.done ? '' : line.value.trim();
+    }
+    async function confirmSubmit() {
+      const reply = await readLine('Review the values above. Type "submit" to submit, or press Enter to cancel: ');
+      return reply.toLowerCase() === 'submit';
+    }
 
-      const promptUser = () => {
-        rl.question('\x1b[1maaf>\x1b[0m ', async (input) => {
-          const trimmed = input.trim();
-          if (!trimmed || trimmed === 'exit' || trimmed === 'quit') {
-            rl.close();
-            return;
-          }
-
-          if (trimmed === 'scan' || trimmed === 'discover') {
-            catalog = await discoverActions(page);
-            printCatalog(catalog);
-            promptUser();
-            return;
-          }
-
-          if (trimmed.startsWith('goto ')) {
-            const newUrl = trimmed.slice(5).trim();
-            const fullUrl = newUrl.startsWith('http') ? newUrl : `${baseUrl}${newUrl}`;
-            log('navigate', fullUrl);
-            await navigateTo(page, fullUrl);
-            catalog = await discoverActions(page);
-            printCatalog(catalog);
-            promptUser();
-            return;
-          }
-
-          if (trimmed === 'help') {
-            console.log(`
-  \x1b[1mCommands:\x1b[0m
-    <natural language>  Ask the LLM to execute an action
-    scan                Re-discover actions on current page
-    goto <path>         Navigate to a different page
-    help                Show this help
-    exit                Quit
-`);
-            promptUser();
-            return;
-          }
-
-          catalog = await discoverActions(page);
-          await runCommand(trimmed, catalog, planner, manifest, page, baseUrl);
-          promptUser();
-        });
-      };
+    try {
+      if (command) {
+        await runCommand(command, catalog, planner, manifest, page, baseUrl, confirmSubmit);
+        return;
+      }
 
       console.log('Type a command in natural language, or "help" for options.\n');
-      promptUser();
-      await new Promise<void>((resolve) => rl.on('close', resolve));
+      while (true) {
+        const input = await readLine('aaf> ');
+        if (!input || input === 'exit' || input === 'quit') break;
+        try {
+          if (input === 'scan' || input === 'discover') {
+            printCatalog(await discoverActions(page));
+          } else if (input.startsWith('goto ')) {
+            const newUrl = input.slice(5).trim();
+            await navigateTo(page, newUrl.startsWith('http') ? newUrl : baseUrl + newUrl);
+            printCatalog(await discoverActions(page));
+          } else if (input === 'help') {
+            console.log('Enter a request, scan or discover, goto <path>, or exit.');
+          } else {
+            catalog = await discoverActions(page);
+            await runCommand(input, catalog, planner, manifest, page, baseUrl, confirmSubmit);
+          }
+        } catch (err) {
+          error((err as Error).message);
+        }
+      }
+    } finally {
+      rl.close();
     }
   } finally {
     await browser.close();
@@ -342,67 +323,70 @@ async function runCommand(
   manifest: AgentManifest,
   page: Page,
   baseUrl: string,
+  confirmSubmit: () => Promise<boolean>,
 ) {
-  try {
-    // 1. Plan — LLM maps natural language to action + args
-    log('plan', `Asking ${OLLAMA_MODEL} to map: "${command}"`);
-    const request = await planner.plan(command, catalog);
-    success(`Planned: \x1b[33m${request.action}\x1b[0m`);
-    dim(`args: ${JSON.stringify(request.args)}`);
-    console.log();
-
-    // 2. Navigate if action is on a different page
-    const actionDef = manifest.actions[request.action];
-    const actionPage = getPageForAction(manifest, request.action);
-    if (actionPage) {
-      const currentPath = new URL(page.url()).pathname.replace(/\/$/, '');
-      const targetPath = actionPage.replace(/\/$/, '');
-      if (currentPath !== targetPath) {
-        const actionUrl = `${baseUrl}${actionPage}`;
-        log('navigate', actionUrl);
-        await navigateTo(page, actionUrl);
-        // Re-discover after navigation
-        catalog = await discoverActions(page);
-      }
-    }
-
-    // 3. Find the discovered action
-    const discovered = catalog.actions.find((a) => a.action === request.action);
-    if (!discovered) {
-      error(`Action "${request.action}" not found on page`);
-      return;
-    }
-
-    // 4. Coerce args to match schema types, then execute
-    let coercedArgs = request.args;
-    if (actionDef?.inputSchema) {
-      const coerceResult = coerceArgs(request.args, actionDef.inputSchema);
-      coercedArgs = coerceResult.args;
-      if (coerceResult.coercions.length > 0) {
-        for (const c of coerceResult.coercions) {
-          dim(`coerce: ${c.field} ${JSON.stringify(c.from)} → ${JSON.stringify(c.to)} (${c.rule})`);
-        }
-      }
-    }
-    log('execute', `Running ${request.action}...`);
-    const result = await executeAction(page, request.action, coercedArgs, discovered);
-
-    // 5. Report
-    console.log();
-    if (result.status === 'completed') {
-      success(`Status: completed`);
-      if (result.result) {
-        success(`Result: ${result.result}`);
-      }
-    } else {
-      error(`Status: ${result.status}`);
-      if (result.error) error(`Error: ${result.error}`);
-    }
-    console.log();
-  } catch (err) {
-    error(`Failed: ${(err as Error).message}`);
-    console.log();
+  // 1. Plan — LLM maps natural language to action + args
+  log('plan', `Asking ${OLLAMA_MODEL} to map: "${command}"`);
+  const plan = await planner.plan(command, catalog);
+  if (plan.kind === 'answer') {
+    console.log(plan.text);
+    return;
   }
+  if (plan.kind === 'navigate') {
+    const target = new URL(plan.page, baseUrl);
+    if (target.origin !== baseUrl) throw new Error('Planner navigation must stay on this site');
+    log('navigate', target.href);
+    await navigateTo(page, target.href);
+    printCatalog(await discoverActions(page));
+    return;
+  }
+  const { request } = plan;
+  success(`Planned: \x1b[33m${request.action}\x1b[0m`);
+  dim(`args: ${JSON.stringify(request.args)}`);
+  console.log();
+
+  // 2. Navigate if action is on a different page
+  const actionDef = manifest.actions[request.action];
+  const actionPage = getPageForAction(manifest, request.action);
+  if (actionPage) {
+    const currentPath = new URL(page.url()).pathname.replace(/\/$/, '');
+    const targetPath = actionPage.replace(/\/$/, '');
+    if (currentPath !== targetPath) {
+      const actionUrl = `${baseUrl}${actionPage}`;
+      log('navigate', actionUrl);
+      await navigateTo(page, actionUrl);
+      // Re-discover after navigation
+      catalog = await discoverActions(page);
+    }
+  }
+
+  // 3. Find the discovered action
+  const discovered = catalog.actions.find((a) => a.action === request.action);
+  if (!discovered) {
+    throw new Error(`Action "${request.action}" not found on page`);
+  }
+
+  // 4. Coerce args to match schema types, then execute
+  let coercedArgs = request.args;
+  if (actionDef?.inputSchema) {
+    const coerceResult = coerceArgs(request.args, actionDef.inputSchema);
+    coercedArgs = coerceResult.args;
+    if (coerceResult.coercions.length > 0) {
+      for (const c of coerceResult.coercions) {
+        dim(`coerce: ${c.field} ${JSON.stringify(c.from)} → ${JSON.stringify(c.to)} (${c.rule})`);
+      }
+    }
+  }
+  log('execute', `Running ${request.action}...`);
+  const needsReview = [actionDef?.confirmation, discovered.confirm]
+    .some(policy => policy === 'review' || policy === 'required');
+  const result = await executeAction(page, request.action, coercedArgs, discovered, needsReview ? confirmSubmit : undefined);
+  if (result.status === 'cancelled') {
+    log('review', 'Cancelled before submission.');
+    return;
+  }
+  success('Status: completed');
+  if (result.result) success(`Result: ${result.result}`);
 }
 
 main().catch((err) => {
